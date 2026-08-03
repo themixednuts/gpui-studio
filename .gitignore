@@ -1,0 +1,5 @@
+/target/
+/.gpui-studio/
+*.log
+.DS_Store
+Thumbs.db

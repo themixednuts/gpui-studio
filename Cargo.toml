@@ -1,0 +1,64 @@
+[package]
+name = "gpui-studio"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+description = "Offline-first native visual builder for HTML-backed GPUI applications"
+repository = "https://github.com/themixednuts/gpui-studio"
+homepage = "https://github.com/themixednuts/gpui-studio"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.6.1", features = ["derive"] }
+directories = "6.0.0"
+gpui = "0.2.2"
+gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "30124cb7d41974ad8be88cd5c683fc248577a872" }
+gpui-mcp-html = { git = "https://github.com/themixednuts/gpui-mcp", rev = "30124cb7d41974ad8be88cd5c683fc248577a872", features = ["dev-watch"] }
+ron = "0.12.2"
+notify = "8.2.0"
+rstar = "0.13.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tempfile = "3.23.0"
+thiserror = "2.0.18"
+toml = { version = "1.1", features = ["serde"] }
+
+[dev-dependencies]
+gpui = { version = "0.2.2", features = ["test-support"] }
+
+[patch.crates-io]
+# gpui-mcp calls GPUI 0.2.2's public Window::dispatch_event API. The published crate
+# accidentally keeps that method's return type private; this patch changes only its visibility.
+gpui = { git = "https://github.com/themixednuts/gpui-mcp", rev = "30124cb7d41974ad8be88cd5c683fc248577a872" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# UI projection and geometry code intentionally uses bounded numeric casts,
+# long declarative registries, and string emitters. Keep the actionable Clippy
+# baseline strict without turning every stylistic pedantic suggestion into CI noise.
+pedantic = { level = "allow", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+# Studio's primary authoring loop hot-reloads documents instead of recompiling
+# Rust, so favor responsive debug binaries while preserving debuginfo and
+# incremental compilation for native component development.
+[profile.dev]
+opt-level = 1
+debug = 1
+incremental = true
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

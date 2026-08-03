@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<body>
+<main id="studio-shell" aria-label="GPUI Studio visual editor">
+  <header id="studio-topbar">
+    <section id="window-brand" aria-label="GPUI Studio">
+      <button id="brand-home" type="button">
+        <span id="studio-gem" aria-hidden="true">◆</span>
+        <span id="studio-name">GPUI Studio</span>
+      </button>
+      <span class="top-divider"></span>
+      <studio-document-tabs id="document-tabs" aria-label="Open editor documents"></studio-document-tabs>
+      <button id="project-menu" type="button" title="Project actions" aria-label="Project actions"><studio-icon name="chevron" size="12"></studio-icon></button>
+    </section>
+
+    <nav id="tool-switcher" aria-label="Canvas tools">
+      <div class="button-group" role="group" aria-label="Canvas tools">
+        <button id="tool-select" type="button" title="Select — click to select, drag to move elements (V)"><i id="tool-select-active"></i><studio-icon name="select" size="13"></studio-icon></button>
+        <button id="tool-move" type="button" title="Move — drag to pan the canvas (M)"><i id="tool-move-active"></i><studio-icon name="pan" size="13"></studio-icon></button>
+        <button id="tool-annotate" type="button" title="Annotate — click elements to comment for the agent (C)"><i id="tool-annotate-active"></i><studio-icon name="comment" size="13"></studio-icon></button>
+      </div>
+      <div class="button-group" role="group" aria-label="View">
+        <button id="view-design" type="button" title="Design — edit the layout"><i id="view-design-active"></i><studio-icon name="frame" size="13"></studio-icon></button>
+        <button id="view-preview" type="button" title="Preview — run the interactions like the live app (P)"><i id="view-preview-active"></i><studio-icon name="play" size="12"></studio-icon></button>
+      </div>
+    </nav>
+
+    <section id="session-actions" aria-label="Session and export">
+      <button id="open-annotations-drawer" type="button" title="Annotations queue"><studio-icon name="comment" size="14"></studio-icon></button>
+      <button id="send-annotations" class="share-action" type="button" title="Send annotations to the MCP agent">
+        <studio-icon name="upload"></studio-icon><span id="send-annotations-label">Send</span>
+      </button>
+      <button id="studio-save" type="button">Export</button>
+      <button id="open-settings" type="button" title="Settings & preferences" aria-label="Settings and preferences"><studio-icon name="settings" size="15"></studio-icon></button>
+    </section>
+  </header>
+
+  <section id="studio-workspace">
+    <aside id="project-rail" aria-label="Layers and files">
+      <nav id="left-tabs" aria-label="Project navigation">
+        <button id="left-layers" type="button"><studio-icon name="layers" size="13"></studio-icon><span>Layers</span><i id="layers-underline"></i></button>
+        <button id="left-files" type="button"><studio-icon name="folder" size="13"></studio-icon><span>Files</span><i id="files-underline"></i></button>
+      </nav>
+
+      <section id="rail-content">
+        <section id="layer-tree" aria-label="Project layer tree">
+          <studio-scroll-area surface="layers">
+            <div class="scroll-surface-body layer-tree-body">
+              <studio-project-tree id="page-tree-rows" aria-label="Project layers"></studio-project-tree>
+              <button id="component-document-root" class="layer-row depth-0" type="button"><i id="component-document-root-active" class="layer-active"></i><span id="component-root-disclosure" class="disclosure">⌄</span><studio-icon class="tree-icon" name="component" tone="accent" size="13"></studio-icon><strong id="component-document-root-name">AppTitlebar</strong></button>
+              <studio-component-tree id="component-tree-children"></studio-component-tree>
+            </div>
+          </studio-scroll-area>
+        </section>
+
+        <section id="project-files" aria-label="Project files">
+          <studio-scroll-area surface="files">
+            <div class="scroll-surface-body project-files-body">
+              <p id="project-path">examples/welcome</p>
+              <div class="file-row"><span class="file-kind html">H</span><span>app.html</span></div>
+              <div class="file-row"><span class="file-kind css">#</span><span>app.css</span></div>
+              <div class="file-row"><span class="file-kind ron">R</span><span>app.bindings.ron</span></div>
+              <div class="file-row"><span class="file-kind gpui">◆</span><span>components.ron</span></div>
+            </div>
+          </studio-scroll-area>
+        </section>
+      </section>
+
+      <section id="component-creator">
+        <section id="insert-panel" aria-label="Insert into component">
+          <div class="insert-heading"><span class="inspector-kicker">INSERT</span><span id="insert-target-hint">into selection</span></div>
+          <div class="insert-primitives" role="group" aria-label="Insert element">
+            <button id="insert-frame" type="button" title="Insert a frame (column)"><studio-icon name="frame" size="12"></studio-icon><span>Frame</span></button>
+            <button id="insert-row" type="button" title="Insert a row"><studio-icon name="row" size="12"></studio-icon><span>Row</span></button>
+            <button id="insert-text" type="button" title="Insert text"><studio-icon name="text" size="12"></studio-icon><span>Text</span></button>
+            <button id="insert-button" type="button" title="Insert a button"><studio-icon name="button" size="12"></studio-icon><span>Button</span></button>
+          </div>
+          <div class="node-actions" role="group" aria-label="Selected node actions">
+            <button id="duplicate-node" type="button" title="Duplicate selected node" aria-label="Duplicate selected node"><studio-icon name="duplicate" size="13"></studio-icon></button>
+            <button id="delete-node" class="danger" type="button" title="Delete selected node" aria-label="Delete selected node"><studio-icon name="trash" size="13"></studio-icon></button>
+          </div>
+          <div class="palette-heading"><span class="inspector-kicker">COMPONENTS</span><span class="palette-hint">drag onto canvas or tree</span></div>
+          <studio-component-palette id="component-palette" aria-label="Component library palette"></studio-component-palette>
+          <studio-resize-handle id="palette-resize" class="resize-handle horizontal" target="component-palette" aria-hidden="true"></studio-resize-handle>
+        </section>
+        <button id="open-component-dialog" type="button"><studio-icon name="plus" size="13"></studio-icon><span>New Component</span></button>
+      </section>
+    </aside>
+    <studio-resize-handle id="rail-resize" class="resize-handle" target="project-rail" aria-hidden="true"></studio-resize-handle>
+
+    <section id="center-column" aria-label="Visual canvas and console">
+      <section id="canvas-stage" aria-label="Live native GPUI canvas">
+        <section id="canvas-viewport">
+          <studio-grid id="canvas-grid" aria-hidden="true"></studio-grid>
+          <nav id="canvas-toolbar" aria-label="Responsive preview controls">
+            <button id="viewport-menu" type="button"><studio-icon name="monitor" size="12"></studio-icon><span id="viewport-label">Responsive</span><studio-icon name="chevron" size="11"></studio-icon></button>
+            <button id="rotate-viewport" type="button" title="Rotate viewport"><studio-icon name="rotate" size="12"></studio-icon></button>
+            <span class="toolbar-divider"></span>
+            <button id="toggle-output-decorations" type="button" title="Toggle native OS window decorations"><span id="decorations-label">Native decorations on</span></button>
+            <button id="toggle-snap" type="button"><studio-icon name="grid" size="12"></studio-icon><span id="snap-label">Snap 8</span></button>
+          </nav>
+          <studio-app-frame id="app-window" aria-label="Running application preview">
+            <studio-canvas id="project-canvas" aria-label="Embedded project canvas">
+              <div id="canvas-placeholder">Opening the native project preview…</div>
+            </studio-canvas>
+            <studio-selection-overlay id="selection-overlay" aria-label="Live selection outline">
+              <div id="selection-tag"><strong id="selection-label">#hero-title</strong><span id="selection-size">live bounds</span></div>
+            </studio-selection-overlay>
+          </studio-app-frame>
+          <studio-annotation-layer id="annotation-layer" aria-label="Canvas annotations">
+            <section id="annotation-popover" aria-label="Annotation editor">
+              <header id="annotation-heading">
+                <span id="annotation-marker">1</span>
+                <strong id="annotation-title">New annotation</strong>
+                <span id="annotation-target">on HeroTitle</span>
+                <button id="close-annotation" type="button" title="Close annotation">×</button>
+              </header>
+              <div id="annotation-body">
+                <textarea id="annotation-draft" placeholder="Describe the change you want here… (saved as you type)"></textarea>
+                <div id="annotation-actions">
+                  <span id="annotation-status">Saved automatically</span>
+                  <button id="delete-annotation" type="button" title="Remove this annotation">Delete</button>
+                </div>
+              </div>
+            </section>
+          </studio-annotation-layer>
+          <div id="zoom-control"><button id="zoom-out" type="button">−</button><button id="zoom-fit" type="button"><strong id="zoom-label">100%</strong></button><button id="zoom-in" type="button">+</button></div>
+          <studio-floating-surface trigger="viewport-menu" boundary="canvas-viewport" width="222" height="174" side="bottom">
+            <section id="viewport-menu-popover" class="editor-menu compact" aria-label="Viewport presets">
+              <button id="viewport-responsive" type="button"><strong>Responsive</strong><span>Fill available canvas</span></button>
+              <button id="viewport-desktop" type="button"><strong>Desktop</strong><span>838 × 518</span></button>
+              <button id="viewport-tablet" type="button"><strong>Tablet</strong><span>618 × 598</span></button>
+              <button id="viewport-mobile" type="button"><strong>Mobile</strong><span>388 × 598</span></button>
+            </section>
+          </studio-floating-surface>
+        </section>
+      </section>
+
+      <studio-bottom-dock id="bottom-dock" aria-label="Console and component states">
+        <header id="dock-tabs">
+          <button id="dock-console" type="button"><span>Console</span><i id="dock-console-active">Console</i></button>
+          <button id="dock-states" type="button"><span>States</span><i id="dock-states-active">States</i></button>
+          <span id="studio-status" class="dock-status">Ready</span>
+          <span id="dock-spacer"></span>
+          <span class="mcp-dot"></span><span id="annotation-count">MCP resources</span>
+          <button id="toggle-dock" type="button"><span id="dock-toggle-label">Collapse</span></button>
+        </header>
+        <div id="console-lines">
+          <studio-console-log id="console-log" aria-label="Live event trace"></studio-console-log>
+        </div>
+        <div id="state-lines">
+          <studio-scroll-area surface="states">
+            <div class="scroll-surface-body state-lines-body">
+              <studio-state-panel id="state-panel" aria-label="Live component state"></studio-state-panel>
+            </div>
+          </studio-scroll-area>
+        </div>
+      </studio-bottom-dock>
+    </section>
+    <studio-resize-handle id="inspector-resize" class="resize-handle" target="inspector" aria-hidden="true"></studio-resize-handle>
+
+    <aside id="inspector" aria-label="Selection inspector">
+      <header id="inspector-heading">
+        <span id="selection-glyph">T</span>
+        <strong id="selection-heading">HeroTitle</strong>
+        <span id="element-tag">&lt;h1&gt;</span>
+      </header>
+
+      <section id="inspector-scroll">
+        <studio-scroll-area surface="inspector">
+          <div class="scroll-surface-body inspector-scroll-body">
+        <nav id="inspector-tabs" aria-label="Structured editor">
+          <button id="inspector-layout-tab" type="button"><span>Layout</span><i id="inspector-layout-active">Layout</i></button>
+          <button id="inspector-style-tab" type="button"><span>Style</span><i id="inspector-style-active">Style</i></button>
+          <button id="inspector-logic-tab" type="button"><span>Logic</span><i id="inspector-logic-active">Logic</i></button>
+        </nav>
+
+        <section id="inspector-layout-panel" class="inspector-panel">
+          <section id="inspector-component-editor" class="inspector-editor">
+            <section class="inspector-section">
+              <div class="inspector-section-heading"><span class="inspector-kicker">DIMENSIONS</span><span class="live-measure"><b id="selection-width">—</b> × <b id="selection-height">—</b> px</span></div>
+              <div class="property-stack">
+                <div class="property-control sizing-control">
+                  <label for="inspector-width-input">Width</label>
+                  <div class="sizing-control-body">
+                    <div class="mini-segments">
+                      <button id="inspector-width-hug" type="button"><span>Hug</span><i id="inspector-width-hug-active">Hug</i></button>
+                      <button id="inspector-width-fill" type="button"><span>Fill</span><i id="inspector-width-fill-active">Fill</i></button>
+                      <button id="inspector-width-fixed" type="button"><span>Fixed</span><i id="inspector-width-fixed-active">Fixed</i></button>
+                    </div>
+                    <div class="number-field"><input id="inspector-width-input" type="text" inputmode="numeric" aria-label="Fixed width"><span>px</span></div>
+                  </div>
+                </div>
+                <div class="property-control sizing-control">
+                  <label for="inspector-height-input">Height</label>
+                  <div class="sizing-control-body">
+                    <div class="mini-segments">
+                      <button id="inspector-height-hug" type="button"><span>Hug</span><i id="inspector-height-hug-active">Hug</i></button>
+                      <button id="inspector-height-fill" type="button"><span>Fill</span><i id="inspector-height-fill-active">Fill</i></button>
+                      <button id="inspector-height-fixed" type="button"><span>Fixed</span><i id="inspector-height-fixed-active">Fixed</i></button>
+                    </div>
+                    <div class="number-field"><input id="inspector-height-input" type="text" inputmode="numeric" aria-label="Fixed height"><span>px</span></div>
+                  </div>
+                </div>
+              </div>
+              <div class="field-grid two inspector-subgrid">
+                <label class="field-control"><span>Min width</span><div class="number-field"><input id="inspector-min-width-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+                <label class="field-control"><span>Max width</span><div class="number-field"><input id="inspector-max-width-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+                <label class="field-control"><span>Min height</span><div class="number-field"><input id="inspector-min-height-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+                <label class="field-control"><span>Max height</span><div class="number-field"><input id="inspector-max-height-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+              </div>
+            </section>
+
+            <section class="inspector-section">
+              <span class="inspector-kicker">SPACING</span>
+              <div class="field-grid two">
+                <label class="field-control"><span>Gap</span><div class="number-field"><input id="inspector-gap-input" type="text" inputmode="numeric"><span>px</span></div></label>
+                <label class="field-control"><span>Padding</span><div class="number-field"><input id="inspector-padding-input" type="text" inputmode="numeric"><span>px</span></div></label>
+                <label class="field-control"><span>Margin</span><div class="number-field"><input id="inspector-margin-input" type="text" inputmode="numeric"><span>px</span></div></label>
+                <label class="field-control"><span>Flex basis</span><div class="number-field"><input id="inspector-basis-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+              </div>
+            </section>
+
+            <section class="inspector-section">
+              <span class="inspector-kicker">FLOW</span>
+              <div class="axis-control"><span>Wrap</span><div class="mini-segments wide">
+                <button id="inspector-wrap-none" type="button"><span>None</span><i id="inspector-wrap-none-active">None</i></button>
+                <button id="inspector-wrap-wrap" type="button"><span>Wrap</span><i id="inspector-wrap-wrap-active">Wrap</i></button>
+                <button id="inspector-wrap-reverse" type="button"><span>Reverse</span><i id="inspector-wrap-reverse-active">Reverse</i></button>
+              </div></div>
+              <div class="field-grid two">
+                <div class="field-control"><span>Grow</span><div class="mini-segments"><button id="inspector-grow-off" type="button"><span>Off</span><i id="inspector-grow-off-active">Off</i></button><button id="inspector-grow-on" type="button"><span>On</span><i id="inspector-grow-on-active">On</i></button></div></div>
+                <div class="field-control"><span>Shrink</span><div class="mini-segments"><button id="inspector-shrink-off" type="button"><span>Off</span><i id="inspector-shrink-off-active">Off</i></button><button id="inspector-shrink-on" type="button"><span>On</span><i id="inspector-shrink-on-active">On</i></button></div></div>
+              </div>
+              <div class="axis-control inspector-subgrid"><span>Overflow</span><div class="mini-segments wide">
+                <button id="inspector-overflow-visible" type="button"><span>Visible</span><i id="inspector-overflow-visible-active">Visible</i></button>
+                <button id="inspector-overflow-hidden" type="button"><span>Clip</span><i id="inspector-overflow-hidden-active">Clip</i></button>
+                <button id="inspector-overflow-scroll" type="button"><span>Scroll</span><i id="inspector-overflow-scroll-active">Scroll</i></button>
+              </div></div>
+            </section>
+
+            <section class="inspector-section">
+              <span class="inspector-kicker">GRID</span>
+              <div class="field-grid two">
+                <label class="field-control"><span>Columns</span><input id="inspector-grid-columns-input" type="text" inputmode="numeric"></label>
+                <label class="field-control"><span>Rows</span><input id="inspector-grid-rows-input" type="text" inputmode="numeric"></label>
+                <label class="field-control"><span>Column start</span><input id="inspector-column-start-input" type="text" inputmode="numeric" placeholder="Auto"></label>
+                <label class="field-control"><span>Column span</span><input id="inspector-column-span-input" type="text" inputmode="numeric"></label>
+                <label class="field-control"><span>Row start</span><input id="inspector-row-start-input" type="text" inputmode="numeric" placeholder="Auto"></label>
+                <label class="field-control"><span>Row span</span><input id="inspector-row-span-input" type="text" inputmode="numeric"></label>
+              </div>
+            </section>
+
+            <section class="inspector-section">
+              <span class="inspector-kicker">ALIGNMENT</span>
+              <div class="axis-control"><span>Cross axis</span><div class="mini-segments wide">
+                <button id="inspector-align-start" type="button"><span>Start</span><i id="inspector-align-start-active">Start</i></button>
+                <button id="inspector-align-center" type="button"><span>Center</span><i id="inspector-align-center-active">Center</i></button>
+                <button id="inspector-align-end" type="button"><span>End</span><i id="inspector-align-end-active">End</i></button>
+              </div></div>
+              <div class="axis-control"><span>Main axis</span><div class="mini-segments wide">
+                <button id="inspector-justify-start" type="button"><span>Start</span><i id="inspector-justify-start-active">Start</i></button>
+                <button id="inspector-justify-center" type="button"><span>Center</span><i id="inspector-justify-center-active">Center</i></button>
+                <button id="inspector-justify-end" type="button"><span>End</span><i id="inspector-justify-end-active">End</i></button>
+              </div></div>
+            </section>
+
+            <section class="inspector-section">
+              <span class="inspector-kicker">POSITION &amp; TRANSFORM</span>
+              <div class="axis-control"><span>Position</span><div class="mini-segments wide">
+                <button id="inspector-position-flow" type="button"><span>Flow</span><i id="inspector-position-flow-active">Flow</i></button>
+                <button id="inspector-position-absolute" type="button"><span>Absolute</span><i id="inspector-position-absolute-active">Absolute</i></button>
+              </div></div>
+              <div class="field-grid two">
+                <label class="field-control"><span>Left</span><div class="number-field"><input id="inspector-offset-left-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+                <label class="field-control"><span>Top</span><div class="number-field"><input id="inspector-offset-top-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+                <label class="field-control"><span>Right</span><div class="number-field"><input id="inspector-offset-right-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+                <label class="field-control"><span>Bottom</span><div class="number-field"><input id="inspector-offset-bottom-input" type="text" inputmode="numeric" placeholder="Auto"><span>px</span></div></label>
+                <label class="field-control"><span>Rotation</span><div class="number-field"><input id="inspector-rotation-input" type="text" inputmode="numeric"><span>°</span></div></label>
+                <label class="field-control"><span>Opacity</span><div class="number-field"><input id="inspector-opacity-input" type="text" inputmode="numeric"><span>%</span></div></label>
+                <label class="field-control full-row"><span>Z index</span><input id="inspector-z-index-input" type="text" inputmode="numeric"></label>
+              </div>
+            </section>
+
+            <section class="inspector-section">
+              <span class="inspector-kicker">RESIZE CONSTRAINTS</span>
+              <div class="constraint-control"><span>Horizontal</span><div class="mini-segments compact-five">
+                <button id="inspector-constraint-x-start" type="button" title="Start"><span>S</span><i id="inspector-constraint-x-start-active">S</i></button>
+                <button id="inspector-constraint-x-center" type="button" title="Center"><span>C</span><i id="inspector-constraint-x-center-active">C</i></button>
+                <button id="inspector-constraint-x-end" type="button" title="End"><span>E</span><i id="inspector-constraint-x-end-active">E</i></button>
+                <button id="inspector-constraint-x-scale" type="button" title="Scale"><span>%</span><i id="inspector-constraint-x-scale-active">%</i></button>
+                <button id="inspector-constraint-x-stretch" type="button" title="Stretch"><span>↔</span><i id="inspector-constraint-x-stretch-active">↔</i></button>
+              </div></div>
+              <div class="constraint-control"><span>Vertical</span><div class="mini-segments compact-five">
+                <button id="inspector-constraint-y-start" type="button" title="Start"><span>S</span><i id="inspector-constraint-y-start-active">S</i></button>
+                <button id="inspector-constraint-y-center" type="button" title="Center"><span>C</span><i id="inspector-constraint-y-center-active">C</i></button>
+                <button id="inspector-constraint-y-end" type="button" title="End"><span>E</span><i id="inspector-constraint-y-end-active">E</i></button>
+                <button id="inspector-constraint-y-scale" type="button" title="Scale"><span>%</span><i id="inspector-constraint-y-scale-active">%</i></button>
+                <button id="inspector-constraint-y-stretch" type="button" title="Stretch"><span>↕</span><i id="inspector-constraint-y-stretch-active">↕</i></button>
+              </div></div>
+            </section>
+          </section>
+          <section id="inspector-page-notice" class="inspector-empty"><strong>Nothing selected</strong><span>Select a node in the canvas or layer tree to edit its layout.</span></section>
+        </section>
+
+        <section id="inspector-style-panel" class="inspector-panel">
+          <section id="inspector-style-editor" class="inspector-editor">
+            <section class="inspector-section">
+              <span class="inspector-kicker">APPEARANCE</span>
+              <div class="property-stack">
+                <label class="color-field"><span>Fill</span><i class="color-swatch fill"></i><input id="inspector-background-input" type="text" spellcheck="false" placeholder="transparent"></label>
+                <label class="color-field"><span>Foreground</span><i class="color-swatch text"></i><input id="inspector-foreground-input" type="text" spellcheck="false"></label>
+                <label class="color-field"><span>Border</span><i class="color-swatch border"></i><input id="inspector-border-input" type="text" spellcheck="false" placeholder="transparent"></label>
+                <label class="field-control inline"><span>Corner radius</span><div class="number-field"><input id="inspector-radius-input" type="text" inputmode="numeric"><span>px</span></div></label>
+              </div>
+            </section>
+
+            <section class="inspector-section">
+              <span class="inspector-kicker">TYPOGRAPHY</span>
+              <div class="property-stack">
+                <label class="field-control full"><span>Font family</span><input id="inspector-font-input" type="text"></label>
+                <div class="field-grid two typography-metrics">
+                  <label class="field-control"><span>Font size</span><div class="number-field"><input id="inspector-font-size-input" type="text" inputmode="numeric"><span>px</span></div></label>
+                  <label class="field-control"><span>Weight</span><input id="inspector-font-weight-input" type="text" inputmode="numeric"></label>
+                  <label class="field-control full-row"><span>Line height</span><div class="number-field"><input id="inspector-line-height-input" type="text" inputmode="numeric"><span>px</span></div></label>
+                </div>
+              </div>
+            </section>
+            <section class="inspector-section">
+              <span class="inspector-kicker">DESIGN TOKENS</span>
+              <div class="inspector-stack">
+                <studio-design-tokens id="inspector-token-list"></studio-design-tokens>
+                <div class="property-editor">
+                  <div class="field-grid two">
+                    <label class="field-control"><span>Path</span><input id="inspector-token-path" type="text" spellcheck="false" placeholder="color.accent"></label>
+                    <label class="field-control"><span>Kind</span><input id="inspector-token-kind" type="text" spellcheck="false" placeholder="Color"></label>
+                    <label class="field-control full-row"><span>Value</span><input id="inspector-token-value" type="text" spellcheck="false" placeholder="#6e7bff"></label>
+                    <label class="field-control full-row"><span>Description</span><input id="inspector-token-description" type="text" placeholder="Primary interactive accent"></label>
+                  </div>
+                  <div class="inspector-action-row"><button id="remove-design-token" class="inspector-add danger" type="button">Remove</button><button id="save-design-token" class="inspector-add primary" type="button">Save token</button></div>
+                </div>
+              </div>
+            </section>
+          </section>
+          <section id="inspector-style-notice" class="inspector-empty"><strong>Nothing selected</strong><span>Select a node to edit its appearance, typography, and design tokens.</span></section>
+        </section>
+
+        <section id="inspector-logic-panel" class="inspector-panel">
+          <section id="inspector-logic-editor" class="inspector-editor">
+            <section class="inspector-section">
+              <span class="inspector-kicker">CONTENT</span>
+              <label class="field-control full"><span>Text value</span><input id="inspector-text-input" type="text" placeholder="No text on this node"></label>
+            </section>
+            <section class="inspector-section">
+              <span class="inspector-kicker">COMPONENT API</span>
+              <div class="inspector-stack">
+                <studio-component-props id="inspector-props-list"></studio-component-props>
+                <div class="property-editor">
+                  <strong class="property-editor-title">Property contract</strong>
+                  <label class="field-control full"><span>Name</span><input id="inspector-prop-name" type="text" spellcheck="false" placeholder="label"></label>
+                  <div class="field-grid two">
+                    <label class="field-control"><span>Type</span><input id="inspector-prop-type" type="text" spellcheck="false" placeholder="String"></label>
+                    <label class="field-control"><span>Default value</span><input id="inspector-prop-default" type="text" spellcheck="false" placeholder="Required"></label>
+                  </div>
+                  <small>Use an existing name to update its public contract.</small>
+                  <div class="inspector-action-row">
+                    <button id="remove-property" class="inspector-add danger" type="button">Remove</button>
+                    <button id="add-property" class="inspector-add primary" type="button">Save property</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="inspector-section">
+              <span class="inspector-kicker">LOCAL STATE</span>
+              <div class="inspector-stack">
+                <studio-component-states id="inspector-state-list"></studio-component-states>
+                <div class="property-editor">
+                  <label class="field-control full"><span>Name</span><input id="inspector-state-name" type="text" spellcheck="false" placeholder="open"></label>
+                  <div class="field-grid two"><label class="field-control"><span>Type</span><input id="inspector-state-type" type="text" spellcheck="false" placeholder="bool"></label><label class="field-control"><span>Initial value</span><input id="inspector-state-default" type="text" spellcheck="false" placeholder="false"></label></div>
+                  <div class="inspector-action-row"><button id="remove-component-state" class="inspector-add danger" type="button">Remove</button><button id="save-component-state" class="inspector-add primary" type="button">Save state</button></div>
+                </div>
+              </div>
+            </section>
+            <section class="inspector-section">
+              <span class="inspector-kicker">VARIANTS</span>
+              <div class="inspector-stack">
+                <studio-component-variants id="inspector-variant-list"></studio-component-variants>
+                <div class="property-editor">
+                  <div class="field-grid two"><label class="field-control"><span>ID</span><input id="inspector-variant-id" type="text" spellcheck="false" placeholder="hover"></label><label class="field-control"><span>Name</span><input id="inspector-variant-name" type="text" placeholder="Hover"></label></div>
+                  <button id="capture-variant-override" class="inspector-add" type="button">Capture selected node values</button>
+                  <div class="inspector-action-row"><button id="remove-component-variant" class="inspector-add danger" type="button">Remove</button><button id="save-component-variant" class="inspector-add primary" type="button">Save variant</button></div>
+                </div>
+              </div>
+            </section>
+            <section class="inspector-section">
+              <span class="inspector-kicker">SLOTS</span>
+              <div class="inspector-stack">
+                <studio-component-slots id="inspector-slot-list"></studio-component-slots>
+                <div class="property-editor">
+                  <div class="field-grid two"><label class="field-control"><span>Name</span><input id="inspector-slot-name" type="text" spellcheck="false" placeholder="content"></label><label class="field-control"><span>Container node</span><input id="inspector-slot-node" type="text" spellcheck="false" placeholder="root"></label></div>
+                  <div class="axis-control"><span>Capacity</span><div class="mini-segments wide"><button id="toggle-slot-multiple" type="button"><span id="slot-capacity-label">Single child</span><i id="slot-multiple-active">Multiple children</i></button></div></div>
+                  <div class="inspector-action-row"><button id="remove-component-slot" class="inspector-add danger" type="button">Remove</button><button id="save-component-slot" class="inspector-add primary" type="button">Save slot</button></div>
+                </div>
+              </div>
+            </section>
+            <section class="inspector-section">
+              <span class="inspector-kicker">INTERACTIONS</span>
+              <studio-component-logic id="inspector-logic-list"></studio-component-logic>
+              <label class="field-control full"><span>Click action</span><input id="inspector-action-input" type="text" spellcheck="false" placeholder="No action"></label>
+              <button id="add-logic" class="inspector-add" type="button">Add interaction</button>
+            </section>
+          </section>
+          <section id="inspector-logic-notice" class="inspector-empty"><strong>Nothing selected</strong><span>Select a node to edit content, component API, state, and interactions.</span></section>
+        </section>
+
+        <details id="code-inspector" aria-label="Generated source">
+          <summary id="code-inspector-toggle"><span>Generated source</span><small>HTML/CSS ⇄ GPUI</small></summary>
+          <div class="code-inspector-body">
+            <div id="code-tabs">
+              <button id="code-html" type="button"><span>HTML / CSS</span><i id="code-html-active">HTML / CSS</i></button>
+              <button id="code-gpui" type="button"><span>GPUI</span><i id="code-gpui-active">GPUI</i></button>
+            </div>
+            <pre id="css-excerpt">Loading presentation source…</pre>
+            <p>Both projections stay synchronized with the canonical component graph.</p>
+          </div>
+        </details>
+          </div>
+        </studio-scroll-area>
+      </section>
+    </aside>
+  </section>
+
+  <studio-floating-surface trigger="project-menu" boundary="studio-shell" width="238" height="132" side="bottom">
+    <section id="project-menu-popover" class="editor-menu" aria-label="Project menu">
+      <button id="show-project-canvas" type="button"><strong>Welcome canvas</strong><span>Current project</span></button>
+      <button id="show-component-library" type="button"><strong>Components</strong><span id="component-menu-summary">Unified document library</span></button>
+      <button id="project-menu-open" type="button"><strong>Open project…</strong><span>Local folder · offline</span></button>
+    </section>
+  </studio-floating-surface>
+
+  <studio-context-menu id="context-menu-host" aria-label="Context menu overlay"></studio-context-menu>
+  <studio-settings id="settings-host" aria-label="Settings and preferences overlay"></studio-settings>
+  <studio-drawer id="drawer-host" aria-label="Annotations drawer overlay"></studio-drawer>
+
+  <section id="component-dialog" aria-label="New component dialog">
+    <article id="component-dialog-card">
+      <header><span class="dialog-glyph">◆</span><strong>New component</strong><button id="close-component-dialog" type="button" title="Close"><studio-icon name="close" size="14"></studio-icon></button></header>
+      <div class="dialog-body">
+        <label class="dialog-field"><span>Name</span><input id="component-name" type="text" value="NewComponent"></label>
+        <section class="dialog-field"><span>Create from</span><div class="dialog-segments component-sources">
+          <button id="component-from-selection" type="button"><span>Selection</span><i id="component-selection-active">Selection</i></button>
+          <button id="component-from-blank" type="button"><span>Blank</span><i id="component-blank-active">Blank</i></button>
+          <button id="component-from-paste-html" type="button"><span>Paste HTML</span><i id="component-paste-html-active">Paste HTML</i></button>
+        </div></section>
+        <section class="dialog-field"><span>Preset library</span><div id="component-preset-grid">
+          <button id="preset-button" type="button"><i id="preset-button-active"></i><strong>Button</strong><small>Accessible primary action</small></button>
+          <button id="preset-button-group" type="button"><i id="preset-button-group-active"></i><strong>Button Group</strong><small>Stateful segmented actions</small></button>
+          <button id="preset-card" type="button"><i id="preset-card-active"></i><strong>Card</strong><small>Content and action footer</small></button>
+          <button id="preset-badge" type="button"><i id="preset-badge-active"></i><strong>Badge</strong><small>Compact semantic status</small></button>
+          <button id="preset-alert" type="button"><i id="preset-alert-active"></i><strong>Alert</strong><small>Dismiss action contract</small></button>
+          <button id="preset-toolbar" type="button"><i id="preset-toolbar-active"></i><strong>Toolbar</strong><small>Command group</small></button>
+          <button id="preset-avatar" type="button"><i id="preset-avatar-active"></i><strong>Avatar</strong><small>Initials identity</small></button>
+          <button id="preset-empty-state" type="button"><i id="preset-empty-state-active"></i><strong>Empty state</strong><small>Recovery action</small></button>
+          <button id="preset-titlebar" type="button"><i id="preset-titlebar-active"></i><strong>Titlebar</strong><small>Window chrome content</small></button>
+          <button id="preset-tabs" type="button"><i id="preset-tabs-active"></i><strong>Tabs</strong><small>Stateful tab list and panel</small></button>
+          <button id="preset-dialog" type="button"><i id="preset-dialog-active"></i><strong>Dialog</strong><small>Accessible modal surface</small></button>
+          <button id="preset-dropdown" type="button"><i id="preset-dropdown-active"></i><strong>Dropdown</strong><small>Select trigger and options</small></button>
+          <button id="preset-dropdown-menu" type="button"><i id="preset-dropdown-menu-active"></i><strong>Dropdown Menu</strong><small>Menu-aim-ready actions</small></button>
+          <button id="preset-drawer" type="button"><i id="preset-drawer-active"></i><strong>Drawer</strong><small>Dismissible side sheet</small></button>
+          <button id="preset-scrollable" type="button"><i id="preset-scrollable-active"></i><strong>Scrollable</strong><small>Bounded scroll container</small></button>
+          <button id="preset-resizable" type="button"><i id="preset-resizable-active"></i><strong>Resizable</strong><small>Adjustable two-pane layout</small></button>
+          <button id="preset-tooltip" type="button"><i id="preset-tooltip-active"></i><strong>Tooltip</strong><small>Contextual description</small></button>
+        </div></section>
+        <section class="dialog-field"><span>Open first in</span><div class="dialog-segments">
+          <button id="component-author-html" type="button"><span>HTML / CSS</span><i id="component-html-active">HTML / CSS</i></button>
+          <button id="component-author-gpui" type="button"><span>GPUI</span><i id="component-gpui-active">GPUI</i></button>
+        </div></section>
+        <label class="dialog-field"><span>Props</span><input id="component-props" type="text" placeholder="title: String, active: bool"></label>
+        <pre id="component-stub">Loading component preview…</pre>
+      </div>
+      <footer><button id="cancel-component-dialog" type="button">Cancel</button><button id="create-component" type="button">Create component</button></footer>
+    </article>
+  </section>
+</main>
+</body>
+</html>

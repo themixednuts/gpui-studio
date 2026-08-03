@@ -1,0 +1,13 @@
+(
+    version: 1,
+    next_id: 2,
+    latest: Some((
+        id: "handoff-000001",
+        annotation_ids: [
+            "comment-000002",
+            "comment-000005",
+        ],
+        project_revision: 1,
+        semantic_generation: 7,
+    )),
+)

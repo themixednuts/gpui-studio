@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;background:#0f1116;color:#e7e9ee;font-family:'Geist',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;}
+  :root{--accent:#6e7bff;}
+  ::selection{background:rgba(110,123,255,0.32);}
+  a{color:var(--accent);text-decoration:none;} a:hover{color:#9aa3ff;}
+  button{font-family:inherit;border:none;background:none;padding:0;margin:0;cursor:pointer;}
+  textarea,input{font-family:inherit;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#2a2e3a;border-radius:8px;border:2px solid transparent;background-clip:content-box;}
+  ::-webkit-scrollbar-thumb:hover{background:#353a48;background-clip:content-box;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  [data-tool="annotate"]{cursor:crosshair;}
+  [data-tool="pan"]{cursor:grab;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+  @keyframes blink{0%,100%{opacity:.25;}50%{opacity:1;}}
+</style>
+</helmet>
+
+<div style="height:100vh;width:100vw;overflow:hidden;background:#0f1116;color:#e7e9ee;position:relative;font-size:14px;">
+
+<!-- ============================== EDITOR ============================== -->
+<sc-if value="{{ showEditor }}" hint-placeholder-val="{{ true }}">
+<div style="height:100vh;display:flex;flex-direction:column;">
+
+  <!-- TOP BAR -->
+  <div style="height:46px;flex:0 0 46px;display:flex;align-items:center;gap:14px;padding:0 14px;background:#111319;border-bottom:1px solid #1e222b;position:relative;z-index:40;">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57;"></span>
+      <span style="width:12px;height:12px;border-radius:50%;background:#febc2e;"></span>
+      <span style="width:12px;height:12px;border-radius:50%;background:#28c840;"></span>
+    </div>
+    <button onClick="{{ setScreenProjects }}" style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#e7e9ee;" style-hover="opacity:0.8">
+      <span style="width:15px;height:15px;border-radius:4px;background:var(--accent);transform:rotate(45deg);display:inline-block;"></span>
+      <span style="font-weight:600;font-size:13px;letter-spacing:-0.2px;">GPUI Studio</span>
+    </button>
+    <span style="width:1px;height:18px;background:#262a35;"></span>
+    <button style="display:flex;align-items:center;gap:6px;color:#a9afbd;font-size:13px;cursor:pointer;" style-hover="color:#e7e9ee">
+      Aurora Player
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+
+    <!-- tool switch (centered) -->
+    <div style="position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:3px;background:#1a1d26;border:1px solid #262a35;border-radius:9px;padding:3px;">
+      <button title="Select (V)" onClick="{{ setToolSelect }}" style="{{ toolSelectStyle }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l6.5 15.5 2.1-6.4 6.4-2.1z"/></svg>
+      </button>
+      <button title="Pan (H)" onClick="{{ setToolPan }}" style="{{ toolPanStyle }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16M4 12h16M9 7l3-3 3 3M9 17l3 3 3-3M7 9l-3 3 3 3M17 9l3 3-3 3"/></svg>
+      </button>
+      <button title="Annotate (C)" onClick="{{ setToolAnnotate }}" style="{{ toolAnnotateStyle }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v8A1.5 1.5 0 0 1 18.5 15H9l-4 4z"/></svg>
+      </button>
+    </div>
+
+    <div style="flex:1;"></div>
+
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 9px;border-radius:7px;background:#15181f;border:1px solid #1e222b;font-size:11.5px;color:#8b91a0;font-family:'Geist Mono',monospace;">
+      <span style="width:7px;height:7px;border-radius:50%;background:#46c98b;animation:pulse 2s infinite;"></span> Live
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 9px;border-radius:7px;background:#15181f;border:1px solid #1e222b;font-size:11.5px;color:#8b91a0;font-family:'Geist Mono',monospace;">
+      <span style="width:7px;height:7px;border-radius:50%;background:var(--accent);"></span> MCP · {{ mcpCount }}
+    </div>
+    <button style="width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#a9afbd;border:1px solid #262a35;" style-hover="background:#1c1e26;color:#e7e9ee" title="Share">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+    </button>
+    <button onClick="{{ setScreenExport }}" style="height:30px;padding:0 14px;border-radius:8px;background:var(--accent);color:#0b0d17;font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;" style-hover="filter:brightness(1.08)">Export</button>
+    <span style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#5b6cff,#c57bff);display:inline-block;"></span>
+  </div>
+
+  <!-- BODY -->
+  <div style="flex:1;display:flex;min-height:0;">
+
+    <!-- LEFT PANEL -->
+    <div style="width:250px;flex:0 0 250px;background:#131620;border-right:1px solid #1e222b;display:flex;flex-direction:column;min-height:0;">
+      <div style="height:38px;flex:0 0 38px;display:flex;align-items:stretch;border-bottom:1px solid #1e222b;padding:0 4px;">
+        <button onClick="{{ setLeftLayers }}" style="{{ leftLayersStyle }}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5M3 17l9 5 9-5"/></svg> Layers
+        </button>
+        <button onClick="{{ setLeftFiles }}" style="{{ leftFilesStyle }}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg> Files
+        </button>
+      </div>
+      <div style="flex:1;overflow:auto;padding:8px 6px;" onMouseLeave="{{ clearHover }}">
+        <sc-if value="{{ showLayersTab }}" hint-placeholder-val="{{ true }}">
+          <div onClick="{{ selectLayer }}" onMouseOver="{{ hoverLayer }}">
+            <sc-for list="{{ layerTree }}" as="row" hint-placeholder-count="12">
+              <div data-layer-id="{{ row.id }}" style="{{ row.style }}">
+                <sc-if value="{{ row.hasChildren }}" hint-placeholder-val="{{ true }}">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#676d7a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:-4px;"><path d="M9 6l6 6-6 6"/></svg>
+                </sc-if>
+                <span style="width:13px;text-align:center;font-family:'Geist Mono',monospace;font-size:11px;color:{{ row.glyphColor }};">{{ row.glyph }}</span>
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ row.name }}</span>
+                <sc-if value="{{ row.isComponent }}" hint-placeholder-val="{{ false }}">
+                  <span style="margin-left:auto;font-size:9px;font-family:'Geist Mono',monospace;color:var(--accent);border:1px solid rgba(110,123,255,0.35);border-radius:4px;padding:1px 4px;">C</span>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ showFilesTab }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ onFileClick }}">
+            <sc-for list="{{ fileTree }}" as="f" hint-placeholder-count="10">
+              <div data-file="{{ f.name }}" style="{{ f.style }}" style-hover="background:#20242e">
+                <span style="width:15px;text-align:center;font-family:'Geist Mono',monospace;font-size:10px;color:{{ f.glyphColor }};text-transform:uppercase;">{{ f.glyph }}</span>
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ f.name }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+      <div style="flex:0 0 auto;border-top:1px solid #1e222b;padding:8px 10px;">
+        <button onClick="{{ openNewComponent }}" style="width:100%;height:30px;border-radius:7px;border:1px dashed #2c313d;color:#8b91a0;font-size:12px;display:flex;align-items:center;justify-content:center;gap:6px;" style-hover="border-color:var(--accent);color:#e7e9ee">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> New component
+        </button>
+      </div>
+    </div>
+
+    <!-- CENTER -->
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0;background:#0d0f14;">
+      <!-- CANVAS -->
+      <div data-canvas data-tool="{{ tool }}" onClick="{{ onCanvasClick }}" onMouseMove="{{ onCanvasMove }}" onMouseLeave="{{ onCanvasLeave }}" style="flex:1;position:relative;overflow:hidden;">
+        <sc-if value="{{ showGrid }}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;inset:0;background-image:radial-gradient(#1b1e27 1px,transparent 1px);background-size:22px 22px;background-position:center;pointer-events:none;"></div>
+        </sc-if>
+
+        <!-- centered app window (the running app being edited) -->
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+          <div style="{{ appScaleStyle }}">
+          <div style="width:840px;height:520px;border-radius:13px;overflow:hidden;background:#0b0d12;border:1px solid #23262f;box-shadow:0 30px 90px rgba(0,0,0,0.6);display:flex;flex-direction:column;">
+            <!-- app titlebar chrome -->
+            <div style="height:38px;flex:0 0 38px;display:flex;align-items:center;padding:0 13px;background:#0c0e13;border-bottom:1px solid #171a22;position:relative;">
+              <div style="display:flex;gap:7px;">
+                <span style="width:10px;height:10px;border-radius:50%;background:#ff5f57;"></span>
+                <span style="width:10px;height:10px;border-radius:50%;background:#febc2e;"></span>
+                <span style="width:10px;height:10px;border-radius:50%;background:#28c840;"></span>
+              </div>
+              <span style="position:absolute;left:50%;transform:translateX(-50%);font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;">Aurora Player</span>
+            </div>
+            <!-- app root -->
+            <div data-node-id="app-root" style="flex:1;display:flex;min-height:0;">
+              <!-- sidebar -->
+              <div data-node-id="sidebar" style="width:206px;flex:0 0 206px;background:#0c0e13;border-right:1px solid #171a22;padding:18px 14px;display:flex;flex-direction:column;gap:18px;">
+                <div style="display:flex;align-items:center;gap:9px;">
+                  <span style="width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,#7c6cff,#c57bff);display:inline-block;"></span>
+                  <span style="font-weight:600;font-size:15px;letter-spacing:-0.3px;">Aurora</span>
+                </div>
+                <div data-node-id="nav" style="display:flex;flex-direction:column;gap:2px;">
+                  <div style="display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:8px;background:rgba(124,108,255,0.14);color:#e7e9ee;font-size:13.5px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-7 8 7M6 10v9h12v-9"/></svg> Home
+                  </div>
+                  <div style="display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:8px;color:#8a90a0;font-size:13.5px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg> Search
+                  </div>
+                  <div style="display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:8px;color:#8a90a0;font-size:13.5px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v16M10 4v16M15 6l4 13"/></svg> Your Library
+                  </div>
+                </div>
+                <div style="height:1px;background:#171a22;"></div>
+                <div data-node-id="playlists" style="display:flex;flex-direction:column;gap:1px;">
+                  <div style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#4d5462;padding:4px 10px 8px;">PLAYLISTS</div>
+                  <div style="padding:7px 10px;border-radius:8px;color:#a9afbd;font-size:13px;">Late Night</div>
+                  <div style="padding:7px 10px;border-radius:8px;color:#a9afbd;font-size:13px;">Focus Flow</div>
+                  <div style="padding:7px 10px;border-radius:8px;color:#a9afbd;font-size:13px;">Rainy Days</div>
+                  <div style="padding:7px 10px;border-radius:8px;color:#a9afbd;font-size:13px;">Discover Weekly</div>
+                </div>
+              </div>
+              <!-- main -->
+              <div data-node-id="main" style="flex:1;display:flex;flex-direction:column;min-width:0;background:#0b0d12;padding:24px 28px;gap:20px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:2px;color:#4d5462;">NOW PLAYING</span>
+                  <span style="display:flex;gap:4px;">
+                    <span style="width:4px;height:4px;border-radius:50%;background:#3a3f4c;"></span>
+                    <span style="width:4px;height:4px;border-radius:50%;background:#3a3f4c;"></span>
+                    <span style="width:4px;height:4px;border-radius:50%;background:#3a3f4c;"></span>
+                  </span>
+                </div>
+                <div data-node-id="now-playing" style="display:flex;gap:26px;align-items:center;">
+                  <div data-node-id="album-art" style="width:186px;height:186px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#1a1d27 0 11px,#141722 11px 22px);display:flex;align-items:center;justify-content:center;box-shadow:0 14px 34px rgba(0,0,0,0.5);flex:0 0 auto;">
+                    <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#454b59;">cover.jpg</span>
+                  </div>
+                  <div style="flex:1;display:flex;flex-direction:column;gap:15px;min-width:0;">
+                    <div>
+                      <h1 data-node-id="track-title" style="margin:0;font-size:26px;font-weight:600;letter-spacing:-0.6px;color:#f2f4f8;">Midnight Signals</h1>
+                      <div data-node-id="track-artist" style="margin-top:6px;font-size:14px;color:#8a90a0;">The Wandering · Neon Fields</div>
+                    </div>
+                    <div data-node-id="progress" style="width:100%;">
+                      <div style="height:4px;border-radius:4px;background:#20242f;position:relative;overflow:hidden;">
+                        <div style="position:absolute;left:0;top:0;bottom:0;width:42%;background:var(--accent);border-radius:4px;"></div>
+                      </div>
+                      <div style="display:flex;justify-content:space-between;margin-top:8px;font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;"><span>1:32</span><span>3:48</span></div>
+                    </div>
+                    <div data-node-id="transport" style="display:flex;align-items:center;gap:18px;">
+                      <button style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:#8a90a0;border-radius:50%;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l9 10h4M3 17h5l3-3.4M14 7h6M17 4l3 3-3 3M17 14l3 3-3 3"/></svg>
+                      </button>
+                      <button style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:#c8cede;border-radius:50%;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7 6v12H5V6zM19 6v12l-9-6z"/></svg>
+                      </button>
+                      <button data-node-id="btn-play" style="width:56px;height:56px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 22px rgba(110,123,255,0.4);">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="#0b0d17" style="margin-left:2px;"><path d="M7 5l12 7-12 7z"/></svg>
+                      </button>
+                      <button style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:#c8cede;border-radius:50%;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M17 6v12h2V6zM5 6v12l9-6z"/></svg>
+                      </button>
+                      <button style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:#8a90a0;border-radius:50%;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a4 4 0 0 1 4-4h9M14 2l3 3-3 3M20 15a4 4 0 0 1-4 4H7M10 22l-3-3 3-3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div data-node-id="queue" style="display:flex;flex-direction:column;gap:2px;margin-top:2px;">
+                  <div style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#4d5462;margin-bottom:6px;">UP NEXT</div>
+                  <div style="display:flex;align-items:center;gap:14px;padding:8px 10px;border-radius:8px;background:#101319;">
+                    <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;width:14px;">1</span>
+                    <span style="width:30px;height:30px;border-radius:6px;background:repeating-linear-gradient(135deg,#1a1d27 0 6px,#141722 6px 12px);flex:0 0 auto;"></span>
+                    <span style="flex:1;font-size:13px;color:#d7dbe3;">Static Bloom</span>
+                    <span style="font-size:13px;color:#8a90a0;">Neon Fields</span>
+                    <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;">4:12</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:14px;padding:8px 10px;border-radius:8px;">
+                    <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;width:14px;">2</span>
+                    <span style="width:30px;height:30px;border-radius:6px;background:repeating-linear-gradient(135deg,#1a1d27 0 6px,#141722 6px 12px);flex:0 0 auto;"></span>
+                    <span style="flex:1;font-size:13px;color:#d7dbe3;">Low Orbit</span>
+                    <span style="font-size:13px;color:#8a90a0;">The Wandering</span>
+                    <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;">3:05</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:14px;padding:8px 10px;border-radius:8px;">
+                    <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;width:14px;">3</span>
+                    <span style="width:30px;height:30px;border-radius:6px;background:repeating-linear-gradient(135deg,#1a1d27 0 6px,#141722 6px 12px);flex:0 0 auto;"></span>
+                    <span style="flex:1;font-size:13px;color:#d7dbe3;">Paper Cities</span>
+                    <span style="font-size:13px;color:#8a90a0;">Halcyon</span>
+                    <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;">5:20</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- overlay layer -->
+        <div style="position:absolute;inset:0;pointer-events:none;">
+          <div style="{{ hoverBoxStyle }}"></div>
+          <div style="{{ selBoxStyle }}">
+            <div style="position:absolute;top:-22px;left:-1.5px;height:19px;display:flex;align-items:center;gap:6px;padding:0 7px;background:var(--accent);color:#0b0d17;border-radius:5px 5px 5px 0;font-size:11px;font-weight:600;white-space:nowrap;font-family:'Geist Mono',monospace;">{{ selName }} <span style="opacity:0.75;">{{ selSizeLabel }}</span></div>
+            <span style="position:absolute;left:-4px;top:-4px;width:7px;height:7px;background:#fff;border:1.5px solid var(--accent);border-radius:2px;"></span>
+            <span style="position:absolute;right:-4px;top:-4px;width:7px;height:7px;background:#fff;border:1.5px solid var(--accent);border-radius:2px;"></span>
+            <span style="position:absolute;left:-4px;bottom:-4px;width:7px;height:7px;background:#fff;border:1.5px solid var(--accent);border-radius:2px;"></span>
+            <span style="position:absolute;right:-4px;bottom:-4px;width:7px;height:7px;background:#fff;border:1.5px solid var(--accent);border-radius:2px;"></span>
+          </div>
+          <!-- annotation badges -->
+          <div style="position:absolute;inset:0;pointer-events:none;" onClick="{{ openAnnotation }}">
+            <sc-for list="{{ annBadges }}" as="b" hint-placeholder-count="2">
+              <div data-ann="{{ b.id }}" style="{{ b.style }}">{{ b.id }}</div>
+            </sc-for>
+          </div>
+          <!-- annotation popover -->
+          <div style="{{ popoverStyle }}">
+            <sc-if value="{{ showPopover }}" hint-placeholder-val="{{ false }}">
+              <div style="background:#171a23;border:1px solid #2c313d;border-radius:13px;box-shadow:0 20px 60px rgba(0,0,0,0.65);overflow:hidden;">
+                <div style="display:flex;align-items:center;gap:8px;padding:11px 13px;border-bottom:1px solid #23272f;">
+                  <span style="width:20px;height:20px;border-radius:50% 50% 50% 3px;background:#f3a34d;color:#161009;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:'Geist Mono',monospace;">{{ ann.id }}</span>
+                  <span style="font-size:12.5px;font-weight:600;">Annotation</span>
+                  <span style="font-size:11.5px;color:#8a90a0;font-family:'Geist Mono',monospace;">on {{ ann.nodeName }}</span>
+                  <button onClick="{{ closeAnnotation }}" style="margin-left:auto;width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:#8a90a0;border-radius:6px;" style-hover="background:#23272f;color:#e7e9ee">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                  </button>
+                </div>
+                <div style="padding:12px 13px;display:flex;flex-direction:column;gap:11px;">
+                  <sc-if value="{{ annDraft }}" hint-placeholder-val="{{ true }}">
+                    <div style="display:flex;flex-direction:column;gap:9px;">
+                      <textarea value="{{ commentDraft }}" onChange="{{ onComment }}" placeholder="Describe the change you want here…" style="width:100%;height:64px;resize:none;background:#0f1116;border:1px solid #2c313d;border-radius:9px;padding:9px 10px;color:#e7e9ee;font-size:13px;line-height:1.5;outline:none;"></textarea>
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <button onClick="{{ submitComment }}" style="height:30px;padding:0 12px;border-radius:8px;background:var(--accent);color:#0b0d17;font-weight:600;font-size:12.5px;display:flex;align-items:center;gap:6px;" style-hover="filter:brightness(1.08)">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.7 6.1L20 10l-6.3 1.9L12 18l-1.7-6.1L4 10l6.3-1.9z"/></svg> Ask AI
+                        </button>
+                        <span style="font-size:11px;color:#5f6675;font-family:'Geist Mono',monospace;">stored via MCP</span>
+                      </div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ annThinking }}" hint-placeholder-val="{{ false }}">
+                    <div>
+                      <div style="font-size:13px;color:#c3c9d6;line-height:1.5;padding-left:10px;border-left:2px solid #2c313d;">{{ ann.text }}</div>
+                      <div style="display:flex;align-items:center;gap:8px;margin-top:11px;font-size:12.5px;color:var(--accent);">
+                        <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);animation:blink 1s infinite;"></span> Editing element…
+                      </div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ annAnswered }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;flex-direction:column;gap:11px;">
+                      <div style="font-size:13px;color:#c3c9d6;line-height:1.5;padding-left:10px;border-left:2px solid #2c313d;">{{ ann.text }}</div>
+                      <div style="background:#0f1116;border:1px solid #23272f;border-radius:10px;padding:11px;">
+                        <div style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px;">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.7 6.1L20 10l-6.3 1.9L12 18l-1.7-6.1L4 10l6.3-1.9z"/></svg> {{ ann.aiLabel }}
+                        </div>
+                        <div style="font-size:12.5px;color:#a9afbd;line-height:1.55;">{{ ann.aiSummary }}</div>
+                      </div>
+                      <div style="display:flex;gap:8px;">
+                        <button onClick="{{ applyAI }}" style="flex:1;height:30px;border-radius:8px;background:var(--accent);color:#0b0d17;font-weight:600;font-size:12.5px;" style-hover="filter:brightness(1.08)">Apply</button>
+                        <button onClick="{{ closeAnnotation }}" style="height:30px;padding:0 12px;border-radius:8px;border:1px solid #2c313d;color:#a9afbd;font-size:12.5px;" style-hover="background:#23272f;color:#e7e9ee">Dismiss</button>
+                      </div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ annApplied }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;align-items:center;gap:9px;color:#46c98b;font-size:13px;">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> Applied to the live app
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+
+        <!-- zoom control -->
+        <div style="position:absolute;right:14px;bottom:14px;display:flex;align-items:center;gap:2px;background:#171a23;border:1px solid #262a35;border-radius:9px;padding:3px;box-shadow:0 6px 20px rgba(0,0,0,0.4);">
+          <button style="width:26px;height:24px;color:#a9afbd;border-radius:6px;font-size:15px;" style-hover="background:#23272f">−</button>
+          <span style="font-size:11.5px;font-family:'Geist Mono',monospace;color:#c3c9d6;padding:0 6px;min-width:44px;text-align:center;">100%</span>
+          <button style="width:26px;height:24px;color:#a9afbd;border-radius:6px;font-size:15px;" style-hover="background:#23272f">+</button>
+        </div>
+      </div>
+
+      <!-- BOTTOM DOCK -->
+      <div style="height:206px;flex:0 0 206px;background:#111319;border-top:1px solid #1e222b;display:flex;flex-direction:column;">
+        <div style="height:36px;flex:0 0 36px;display:flex;align-items:stretch;border-bottom:1px solid #1e222b;padding:0 8px;">
+          <button onClick="{{ setBottomConsole }}" style="{{ bottomConsoleStyle }}">Console</button>
+          <button onClick="{{ setBottomTimeline }}" style="{{ bottomTimelineStyle }}">States</button>
+          <div style="flex:1;"></div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:'Geist Mono',monospace;color:#5f6675;">
+            <span style="width:7px;height:7px;border-radius:50%;background:var(--accent);"></span> MCP · {{ mcpCount }} resources
+          </div>
+        </div>
+        <div style="flex:1;overflow:auto;">
+          <sc-if value="{{ showConsole }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:8px 0;">
+              <sc-for list="{{ logsView }}" as="log" hint-placeholder-count="6">
+                <div style="display:flex;gap:12px;padding:2px 14px;font-family:'Geist Mono',monospace;font-size:11.5px;line-height:1.6;">
+                  <span style="color:#4d5462;flex:0 0 auto;">{{ log.t }}</span>
+                  <span style="{{ log.tagStyle }}">{{ log.tag }}</span>
+                  <span style="color:#a9afbd;">{{ log.msg }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ showTimeline }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:14px;">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;" onClick="{{ setActiveState }}">
+                <sc-for list="{{ stateChips }}" as="c" hint-placeholder-count="5">
+                  <button data-state="{{ c.name }}" style="{{ c.style }}">{{ c.name }}</button>
+                </sc-for>
+              </div>
+              <div style="margin-top:16px;height:52px;border-radius:9px;background:#0f1116;border:1px solid #23272f;display:flex;align-items:center;padding:0 14px;gap:10px;">
+                <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#5f6675;">t</span>
+                <div style="flex:1;height:2px;background:#23272f;position:relative;">
+                  <span style="position:absolute;left:0;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--accent);"></span>
+                  <span style="position:absolute;left:32%;top:-3px;width:8px;height:8px;border-radius:50%;background:#3a3f4c;"></span>
+                  <span style="position:absolute;left:66%;top:-3px;width:8px;height:8px;border-radius:50%;background:#3a3f4c;"></span>
+                  <span style="position:absolute;left:100%;top:-3px;width:8px;height:8px;border-radius:50%;background:#3a3f4c;transform:translateX(-100%);"></span>
+                </div>
+              </div>
+              <div style="margin-top:11px;font-size:12px;color:#8a90a0;">Editing the <span style="color:var(--accent);font-weight:600;">{{ activeState }}</span> variant · changes are scoped to this state.</div>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT PANEL / INSPECTOR -->
+    <div style="width:302px;flex:0 0 302px;background:#131620;border-left:1px solid #1e222b;display:flex;flex-direction:column;min-height:0;">
+      <div style="flex:0 0 auto;padding:13px 15px;border-bottom:1px solid #1e222b;display:flex;align-items:center;gap:9px;">
+        <span style="width:20px;height:20px;border-radius:6px;background:rgba(110,123,255,0.16);color:var(--accent);display:flex;align-items:center;justify-content:center;font-family:'Geist Mono',monospace;font-size:11px;">{{ sel.glyph }}</span>
+        <span style="font-weight:600;font-size:13.5px;">{{ sel.name }}</span>
+        <span style="margin-left:auto;font-family:'Geist Mono',monospace;font-size:10.5px;color:#5f6675;background:#0f1116;border:1px solid #23272f;border-radius:5px;padding:2px 6px;">&lt;{{ sel.tag }}&gt;</span>
+      </div>
+      <div style="flex:1;overflow:auto;padding:15px;display:flex;flex-direction:column;gap:20px;">
+        <!-- Layout -->
+        <div>
+          <div style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#5f6675;margin-bottom:9px;">LAYOUT</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div style="display:flex;align-items:center;gap:6px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;"><span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">W</span><span style="margin-left:auto;font-size:12.5px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.w }}</span></div>
+            <div style="display:flex;align-items:center;gap:6px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;"><span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">H</span><span style="margin-left:auto;font-size:12.5px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.h }}</span></div>
+            <div style="display:flex;align-items:center;gap:6px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;"><span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">Radius</span><span style="margin-left:auto;font-size:12.5px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.radius }}</span></div>
+            <div style="display:flex;align-items:center;gap:6px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;"><span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">Pad</span><span style="margin-left:auto;font-size:12.5px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.pad }}</span></div>
+          </div>
+        </div>
+        <!-- Appearance -->
+        <div>
+          <div style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#5f6675;margin-bottom:9px;">APPEARANCE</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;align-items:center;gap:9px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;">
+              <span style="{{ fillSwatchStyle }}"></span>
+              <span style="font-size:10.5px;color:#5f6675;font-family:'Geist Mono',monospace;">Fill</span>
+              <span style="margin-left:auto;font-size:12px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.bgHex }}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;">
+              <span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">Opacity</span>
+              <span style="margin-left:auto;font-size:12px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.opacity }}%</span>
+            </div>
+          </div>
+        </div>
+        <!-- Typography -->
+        <sc-if value="{{ hasText }}" hint-placeholder-val="{{ true }}">
+          <div>
+            <div style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#5f6675;margin-bottom:9px;">TYPOGRAPHY</div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div style="display:flex;align-items:center;gap:9px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;"><span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">Font</span><span style="margin-left:auto;font-size:12px;color:#d7dbe3;">{{ sel.fontFamily }}</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div style="display:flex;align-items:center;gap:6px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;"><span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">Size</span><span style="margin-left:auto;font-size:12.5px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.fontSize }}</span></div>
+                <div style="display:flex;align-items:center;gap:6px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;"><span style="color:#5f6675;font-size:10.5px;font-family:'Geist Mono',monospace;">Wt</span><span style="margin-left:auto;font-size:12.5px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.fontWeight }}</span></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:9px;background:#0f1116;border:1px solid #262a35;border-radius:7px;padding:7px 9px;">
+                <span style="{{ colorSwatchStyle }}"></span>
+                <span style="font-size:10.5px;color:#5f6675;font-family:'Geist Mono',monospace;">Color</span>
+                <span style="margin-left:auto;font-size:12px;color:#d7dbe3;font-family:'Geist Mono',monospace;">{{ sel.colorHex }}</span>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+        <!-- Code -->
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;">
+            <span style="font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#5f6675;">CODE</span>
+          </div>
+          <div style="display:flex;gap:3px;background:#0f1116;border:1px solid #262a35;border-radius:8px;padding:3px;margin-bottom:9px;">
+            <button onClick="{{ setCodeHtml }}" style="{{ codeHtmlStyle }}">HTML / CSS</button>
+            <button onClick="{{ setCodeGpui }}" style="{{ codeGpuiStyle }}">GPUI</button>
+          </div>
+          <pre style="margin:0;background:#0b0d12;border:1px solid #1e222b;border-radius:9px;padding:12px 13px;font-family:'Geist Mono',monospace;font-size:11.5px;line-height:1.6;color:#c3c9d6;white-space:pre;overflow:auto;">{{ code }}</pre>
+          <div style="margin-top:8px;font-size:11px;color:#5f6675;line-height:1.5;">Auto-converted both ways. Edits in either view sync to the live app.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL OVERLAY -->
+  <sc-if value="{{ showAnyModal }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeModal }}" style="position:absolute;inset:0;z-index:100;background:rgba(6,7,10,0.62);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;">
+    <!-- New component -->
+    <sc-if value="{{ showComponentModal }}" hint-placeholder-val="{{ true }}">
+    <div onClick="{{ stop }}" style="width:480px;background:#171a23;border:1px solid #2c313d;border-radius:15px;box-shadow:0 30px 80px rgba(0,0,0,0.6);overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:9px;padding:15px 17px;border-bottom:1px solid #23272f;">
+        <span style="width:22px;height:22px;border-radius:6px;background:rgba(110,123,255,0.16);color:var(--accent);display:flex;align-items:center;justify-content:center;font-family:'Geist Mono',monospace;font-size:12px;">◆</span>
+        <span style="font-weight:600;font-size:14.5px;">New component</span>
+        <button onClick="{{ closeModal }}" style="margin-left:auto;width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#8a90a0;border-radius:6px;" style-hover="background:#23272f;color:#e7e9ee"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div style="padding:17px;display:flex;flex-direction:column;gap:16px;">
+        <div>
+          <div style="font-size:12px;color:#8a90a0;margin-bottom:7px;">Name</div>
+          <input value="{{ compName }}" onChange="{{ onCompName }}" style="width:100%;height:36px;background:#0f1116;border:1px solid #2c313d;border-radius:9px;padding:0 11px;color:#e7e9ee;font-size:13.5px;outline:none;font-family:'Geist Mono',monospace;" />
+        </div>
+        <div>
+          <div style="font-size:12px;color:#8a90a0;margin-bottom:7px;">Create from</div>
+          <div style="display:flex;gap:3px;background:#0f1116;border:1px solid #2c313d;border-radius:9px;padding:3px;" onClick="{{ setCompFrom }}">
+            <sc-for list="{{ compFroms }}" as="c" hint-placeholder-count="3"><button data-cfrom="{{ c.name }}" style="{{ c.style }}">{{ c.name }}</button></sc-for>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#8a90a0;margin-bottom:7px;">Author in</div>
+          <div style="display:flex;gap:3px;background:#0f1116;border:1px solid #2c313d;border-radius:9px;padding:3px;" onClick="{{ setCompMode }}">
+            <sc-for list="{{ compModes }}" as="c" hint-placeholder-count="2"><button data-cmode="{{ c.name }}" style="{{ c.style }}">{{ c.name }}</button></sc-for>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#8a90a0;margin-bottom:7px;">Props</div>
+          <input value="{{ compProps }}" onChange="{{ onCompProps }}" placeholder="title: String, active: bool" style="width:100%;height:36px;background:#0f1116;border:1px solid #2c313d;border-radius:9px;padding:0 11px;color:#e7e9ee;font-size:12.5px;outline:none;font-family:'Geist Mono',monospace;" />
+        </div>
+        <pre style="margin:0;background:#0b0d12;border:1px solid #1e222b;border-radius:9px;padding:12px 13px;font-family:'Geist Mono',monospace;font-size:11.5px;line-height:1.6;color:#c3c9d6;white-space:pre;overflow:auto;max-height:150px;">{{ compStub }}</pre>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:9px;padding:14px 17px;border-top:1px solid #23272f;">
+        <button onClick="{{ closeModal }}" style="height:34px;padding:0 15px;border-radius:9px;border:1px solid #2c313d;color:#a9afbd;font-size:13px;" style-hover="background:#23272f;color:#e7e9ee">Cancel</button>
+        <button onClick="{{ createComponent }}" style="height:34px;padding:0 17px;border-radius:9px;background:var(--accent);color:#0b0d17;font-weight:600;font-size:13px;" style-hover="filter:brightness(1.08)">Create component</button>
+      </div>
+    </div>
+    </sc-if>
+    <!-- styles.css viewer -->
+    <sc-if value="{{ showStylesModal }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ stop }}" style="width:520px;background:#171a23;border:1px solid #2c313d;border-radius:15px;box-shadow:0 30px 80px rgba(0,0,0,0.6);overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:9px;padding:15px 17px;border-bottom:1px solid #23272f;">
+        <span style="font-family:'Geist Mono',monospace;font-size:10px;color:#5aa9e6;background:rgba(90,169,230,0.12);border-radius:5px;padding:3px 6px;">CSS</span>
+        <span style="font-weight:600;font-size:14px;font-family:'Geist Mono',monospace;">styles.css</span>
+        <span style="font-size:11.5px;color:#5f6675;">project root · shared tokens &amp; classes</span>
+        <button onClick="{{ closeModal }}" style="margin-left:auto;width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#8a90a0;border-radius:6px;" style-hover="background:#23272f;color:#e7e9ee"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div style="padding:17px;">
+        <pre style="margin:0;background:#0b0d12;border:1px solid #1e222b;border-radius:9px;padding:14px;font-family:'Geist Mono',monospace;font-size:12px;line-height:1.65;color:#c3c9d6;white-space:pre;overflow:auto;max-height:340px;">{{ stylesCss }}</pre>
+        <div style="margin-top:12px;font-size:12px;color:#8a90a0;line-height:1.55;">Global styles live here. Per-element inline styles (from the Inspector) and the GPUI builder chain stay in sync with these classes — edit any layer, all three update.</div>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+</div>
+</sc-if>
+
+<!-- ============================== PROJECTS ============================== -->
+<sc-if value="{{ showProjects }}" hint-placeholder-val="{{ false }}">
+<div style="height:100vh;overflow:auto;background:#0f1116;">
+  <div style="height:56px;display:flex;align-items:center;gap:14px;padding:0 26px;border-bottom:1px solid #1e222b;position:sticky;top:0;background:rgba(15,17,22,0.9);backdrop-filter:blur(10px);z-index:10;">
+    <span style="width:17px;height:17px;border-radius:5px;background:var(--accent);transform:rotate(45deg);display:inline-block;"></span>
+    <span style="font-weight:600;font-size:14px;">GPUI Studio</span>
+    <div style="flex:1;"></div>
+    <div style="display:flex;align-items:center;gap:8px;background:#15181f;border:1px solid #262a35;border-radius:9px;padding:7px 11px;width:240px;color:#5f6675;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <span style="font-size:12.5px;">Search projects</span>
+    </div>
+    <button onClick="{{ setScreenEditor }}" style="height:34px;padding:0 15px;border-radius:9px;background:var(--accent);color:#0b0d17;font-weight:600;font-size:13px;display:flex;align-items:center;gap:7px;" style-hover="filter:brightness(1.08)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> New project
+    </button>
+    <span style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#5b6cff,#c57bff);display:inline-block;"></span>
+  </div>
+
+  <div style="max-width:1120px;margin:0 auto;padding:38px 26px 60px;">
+    <h1 style="margin:0 0 6px;font-size:28px;font-weight:600;letter-spacing:-0.6px;">Projects</h1>
+    <p style="margin:0 0 28px;color:#8a90a0;font-size:14px;">Design, build and ship native GPUI apps — visually or in code.</p>
+
+    <div style="font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:1.5px;color:#5f6675;margin-bottom:12px;">START FROM</div>
+    <div style="display:flex;gap:12px;margin-bottom:36px;flex-wrap:wrap;" onClick="{{ openProject }}">
+      <sc-for list="{{ templates }}" as="t" hint-placeholder-count="5">
+        <button style="height:76px;flex:1;min-width:150px;border:1px solid #262a35;border-radius:11px;background:#15181f;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:8px;padding:0 15px;" style-hover="border-color:var(--accent);background:#1a1d26">
+          <span style="width:22px;height:22px;border-radius:6px;background:rgba(110,123,255,0.16);display:flex;align-items:center;justify-content:center;color:var(--accent);">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </span>
+          <span style="font-size:13px;color:#d7dbe3;">{{ t }}</span>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:1.5px;color:#5f6675;margin-bottom:12px;">RECENT</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;" onClick="{{ openProject }}">
+      <sc-for list="{{ projects }}" as="p" hint-placeholder-count="6">
+        <div style="border:1px solid #23272f;border-radius:13px;background:#14171f;overflow:hidden;cursor:pointer;" style-hover="border-color:#33394a;transform:translateY(-2px)">
+          <div style="height:130px;background:repeating-linear-gradient(135deg,#181b24 0 12px,#141722 12px 24px);position:relative;display:flex;align-items:center;justify-content:center;">
+            <span style="width:44px;height:44px;border-radius:11px;background:{{ p.ac }};opacity:0.9;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 22px rgba(0,0,0,0.4);">
+              <span style="width:16px;height:16px;border-radius:4px;background:rgba(255,255,255,0.85);transform:rotate(45deg);display:inline-block;"></span>
+            </span>
+          </div>
+          <div style="padding:13px 15px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="font-weight:600;font-size:14px;">{{ p.name }}</span>
+              <span style="font-family:'Geist Mono',monospace;font-size:9.5px;color:var(--accent);border:1px solid rgba(110,123,255,0.35);border-radius:5px;padding:2px 5px;">GPUI</span>
+            </div>
+            <div style="font-size:12.5px;color:#8a90a0;margin-top:4px;">{{ p.kind }}</div>
+            <div style="font-family:'Geist Mono',monospace;font-size:11px;color:#4d5462;margin-top:10px;">edited {{ p.edited }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<!-- ============================== EXPORT ============================== -->
+<sc-if value="{{ showExport }}" hint-placeholder-val="{{ false }}">
+<div style="height:100vh;overflow:auto;background:#0f1116;">
+  <div style="height:56px;display:flex;align-items:center;gap:12px;padding:0 26px;border-bottom:1px solid #1e222b;">
+    <button onClick="{{ setScreenEditor }}" style="display:flex;align-items:center;gap:7px;color:#a9afbd;font-size:13px;" style-hover="color:#e7e9ee">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg> Back to editor
+    </button>
+    <div style="flex:1;"></div>
+    <span style="font-family:'Geist Mono',monospace;font-size:11.5px;color:#5f6675;">aurora-player</span>
+  </div>
+
+  <div style="max-width:720px;margin:0 auto;padding:44px 26px 60px;">
+    <h1 style="margin:0 0 6px;font-size:26px;font-weight:600;letter-spacing:-0.5px;">Export Aurora Player</h1>
+    <p style="margin:0 0 30px;color:#8a90a0;font-size:14px;">Compile to a native binary. GPUI components, styles and MCP resources are bundled.</p>
+
+    <div style="font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:1.5px;color:#5f6675;margin-bottom:12px;">TARGET</div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:30px;" onClick="{{ setTarget }}">
+      <sc-for list="{{ targets }}" as="t" hint-placeholder-count="4">
+        <button data-target="{{ t.id }}" style="{{ t.targetStyle }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+            <span style="font-weight:600;font-size:14px;">{{ t.name }}</span>
+            <sc-if value="{{ t.active }}" hint-placeholder-val="{{ false }}">
+              <span style="width:16px;height:16px;border-radius:50%;background:var(--accent);color:#0b0d17;display:flex;align-items:center;justify-content:center;">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+              </span>
+            </sc-if>
+          </div>
+          <span style="font-size:12px;color:#8a90a0;font-family:'Geist Mono',monospace;">{{ t.detail }}</span>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:1.5px;color:#5f6675;margin-bottom:12px;">BUILD</div>
+    <div style="border:1px solid #23272f;border-radius:12px;overflow:hidden;margin-bottom:26px;">
+      <div style="display:flex;align-items:center;padding:13px 15px;border-bottom:1px solid #1e222b;"><span style="font-size:13.5px;">Profile</span><span style="margin-left:auto;font-family:'Geist Mono',monospace;font-size:12.5px;color:#d7dbe3;">release · optimized</span></div>
+      <div style="display:flex;align-items:center;padding:13px 15px;border-bottom:1px solid #1e222b;"><span style="font-size:13.5px;">Bundle identifier</span><span style="margin-left:auto;font-family:'Geist Mono',monospace;font-size:12.5px;color:#d7dbe3;">com.aurora.player</span></div>
+      <div style="display:flex;align-items:center;padding:13px 15px;"><span style="font-size:13.5px;">Code signing</span><span style="margin-left:auto;font-family:'Geist Mono',monospace;font-size:12.5px;color:#46c98b;">Developer ID ✓</span></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;">
+      <button style="height:44px;flex:1;border-radius:11px;background:var(--accent);color:#0b0d17;font-weight:600;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;" style-hover="filter:brightness(1.08)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 11l4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg> Build &amp; export
+      </button>
+      <button style="height:44px;padding:0 18px;border-radius:11px;border:1px solid #2c313d;color:#d7dbe3;font-size:14px;" style-hover="background:#1a1d26">Publish to Cloud</button>
+    </div>
+    <div style="margin-top:14px;font-size:12px;color:#5f6675;font-family:'Geist Mono',monospace;">{{ mcpCount }} annotations bundled as MCP resources → gpui://annotations/*</div>
+  </div>
+</div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#6e7bff&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Theme&quot;},&quot;startScreen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;projects&quot;,&quot;editor&quot;,&quot;export&quot;],&quot;default&quot;:&quot;editor&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Theme&quot;},&quot;canvasGrid&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Canvas&quot;}}">
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.metaById = {
+      'app-root':{name:'AuroraPlayer',type:'component'},
+      'sidebar':{name:'Sidebar',type:'element'},
+      'nav':{name:'NavList',type:'element'},
+      'playlists':{name:'Playlists',type:'element'},
+      'main':{name:'MainView',type:'element'},
+      'now-playing':{name:'NowPlaying',type:'component'},
+      'album-art':{name:'AlbumArt',type:'element'},
+      'track-title':{name:'TrackTitle',type:'text'},
+      'track-artist':{name:'TrackArtist',type:'text'},
+      'progress':{name:'ProgressBar',type:'element'},
+      'transport':{name:'Transport',type:'element'},
+      'btn-play':{name:'PlayButton',type:'component'},
+      'queue':{name:'Queue',type:'element'},
+    };
+    this.htmlById = {
+      'album-art':'<div class="album-art">\n  <img src="assets/cover.jpg"\n       alt="Now playing" />\n</div>',
+      'btn-play':'<button class="play-btn"\n        aria-label="Play">\n  <Icon name="play" />\n</button>',
+      'progress':'<div class="progress">\n  <div class="progress__fill"\n       style="width: 42%" />\n</div>',
+      'track-title':'<h1 class="track-title">\n  Midnight Signals\n</h1>',
+    };
+    this.layerRaw = [
+      ['app-root','AuroraPlayer',0,true],
+      ['sidebar','Sidebar',1,true],
+      ['nav','NavList',2,false],
+      ['playlists','Playlists',2,false],
+      ['main','MainView',1,true],
+      ['now-playing','NowPlaying',2,true],
+      ['album-art','AlbumArt',3,false],
+      ['track-title','TrackTitle',3,false],
+      ['track-artist','TrackArtist',3,false],
+      ['progress','ProgressBar',3,false],
+      ['transport','Transport',3,true],
+      ['btn-play','PlayButton',4,false],
+      ['queue','Queue',2,false],
+    ];
+    this.fileRaw = [
+      ['aurora-player',0,'folder'],
+      ['src',1,'folder'],
+      ['app.rs',2,'rs'],
+      ['main.rs',2,'rs'],
+      ['components',1,'folder'],
+      ['NowPlaying.gpui',2,'gpui'],
+      ['PlayButton.gpui',2,'gpui'],
+      ['Sidebar.gpui',2,'gpui'],
+      ['styles.css',1,'css'],
+      ['Cargo.toml',1,'toml'],
+    ];
+    this.state = {
+      screen: props.startScreen || 'editor',
+      tool: 'select',
+      leftTab: 'layers',
+      bottomTab: 'console',
+      codeTab: 'html',
+      selectedId: 'track-title',
+      hoverId: null,
+      measured: {},
+      selStyle: null,
+      canvasScale: 1,
+      modal: null,
+      compName: 'TrackBadge',
+      compFrom: 'Selection',
+      compMode: 'HTML / CSS',
+      compProps: 'title: String, active: bool',
+      userComponents: [],
+      activeState: 'Default',
+      activeTarget: 'macos',
+      commentDraft: '',
+      activeAnnotation: null,
+      annotations: [
+        {id:1,nodeId:'album-art',text:'Round the artwork corners more and add a soft shadow.',status:'answered',ai:{label:'Edited AlbumArt',summary:'Set corner radius 8px \u2192 16px and added a soft drop shadow. Preview updated live.'}},
+        {id:2,nodeId:'btn-play',text:'Make the play button 56px with a subtle accent glow on hover.',status:'answered',ai:{label:'Edited PlayButton',summary:'Resized to 56px and added an accent glow on :hover. Ready to apply.'}},
+      ],
+      logs: [
+        {t:'12:04:19',c:'#46c98b',tag:'build',msg:'aurora-player compiled in 1.2s \u00b7 hot reload ready'},
+        {t:'12:04:41',c:'#6e7bff',tag:'mcp',msg:'client connected \u00b7 exposing gpui://tree, gpui://annotations'},
+        {t:'12:05:02',c:'#f3a34d',tag:'mcp',msg:'annotation #1 stored \u2192 gpui://annotations/1'},
+        {t:'12:05:02',c:'#f3a34d',tag:'mcp',msg:'annotation #2 stored \u2192 gpui://annotations/2'},
+        {t:'12:05:08',c:'#9aa0ad',tag:'style',msg:'AlbumArt rounded 8px \u2192 16px (annotation #1)'},
+        {t:'12:05:09',c:'#46c98b',tag:'build',msg:'incremental recompile \u00b7 84ms'},
+      ],
+    };
+  }
+  componentDidMount(){
+    this.applyAccent();
+    this._t1=setTimeout(()=>{ this.measureLayout(); this.selectNode('track-title',true); },80);
+    this._t2=setTimeout(()=>this.measureLayout(),450);
+    this._onR=()=>this.measureLayout();
+    window.addEventListener('resize',this._onR);
+  }
+  componentDidUpdate(prev){ if(prev.accent!==this.props.accent) this.applyAccent(); }
+  componentWillUnmount(){ clearTimeout(this._t1); clearTimeout(this._t2); window.removeEventListener('resize',this._onR); }
+  applyAccent(){ try{ document.documentElement.style.setProperty('--accent', this.props.accent||'#6e7bff'); }catch(e){} }
+  canvasEl(){ return document.querySelector('[data-canvas]'); }
+  nodeEl(id){ return document.querySelector('[data-node-id="'+id+'"]'); }
+  meta(id){ return this.metaById[id] || {name:id,type:'element'}; }
+  glyphFor(t){ return t==='text'?'T':(t==='component'?'\u25c6':'\u25a2'); }
+  measureLayout(){
+    const vp=this.canvasEl(); if(!vp) return;
+    const w=vp.getBoundingClientRect().width, h=vp.getBoundingClientRect().height;
+    const scale=Math.min(1, (w-56)/840, (h-56)/520);
+    const next=Math.max(0.4, Math.round(scale*100)/100);
+    if(next!==this.state.canvasScale){ this.setState({canvasScale:next}, ()=>requestAnimationFrame(()=>this.measureNodes())); }
+    else this.measureNodes();
+  }
+  measureNodes(){
+    const vp=this.canvasEl(); if(!vp) return;
+    const c=vp.getBoundingClientRect(); const map={};
+    vp.querySelectorAll('[data-node-id]').forEach(el=>{
+      const r=el.getBoundingClientRect();
+      map[el.getAttribute('data-node-id')]={left:r.left-c.left,top:r.top-c.top,width:r.width,height:r.height};
+    });
+    const patch={measured:map};
+    if(this.state.selectedId) patch.selStyle=this.computeStyle(this.state.selectedId);
+    this.setState(patch);
+  }
+  toHex(c){
+    if(!c) return null;
+    const m=c.match(/[\d.]+/g); if(!m) return null;
+    if(m.length>=4 && parseFloat(m[3])===0) return null;
+    return '#'+m.slice(0,3).map(n=>Math.round(parseFloat(n)).toString(16).padStart(2,'0')).join('');
+  }
+  genGpui(el,id){
+    const cs=getComputedStyle(el); const r=el.getBoundingClientRect(); const p=v=>Math.round(parseFloat(v))||0;
+    const rw=el.offsetWidth, rh=el.offsetHeight;
+    const meta=this.meta(id); const L=['div()'];
+    if(rw===rh) L.push('.size(px('+rw+'.))');
+    else { L.push('.w(px('+rw+'.))'); L.push('.h(px('+rh+'.))'); }
+    const rad=p(cs.borderTopLeftRadius); if(rad) L.push('.rounded(px('+rad+'.))');
+    const pad=p(cs.paddingTop); if(pad) L.push('.p(px('+pad+'.))');
+    const bg=this.toHex(cs.backgroundColor); if(bg) L.push('.bg(rgb(0x'+bg.slice(1)+'))');
+    if(meta.type==='text'){
+      L.push('.text_size(px('+p(cs.fontSize)+'.))');
+      const col=this.toHex(cs.color); if(col) L.push('.text_color(rgb(0x'+col.slice(1)+'))');
+      if(parseInt(cs.fontWeight)>=600) L.push('.font_weight(FontWeight::SEMIBOLD)');
+      L.push('.child("'+el.textContent.trim().slice(0,22)+'")');
+    } else if(el.childElementCount>0){
+      L.push('.child(/* '+el.childElementCount+' children */)');
+    }
+    return L.join('\n    ');
+  }
+  genHtml(el,id){
+    const c=this.htmlById[id]; if(c) return c;
+    const meta=this.meta(id);
+    const cls=meta.name.replace(/([a-z])([A-Z])/g,'$1-$2').toLowerCase();
+    const tag=el.tagName.toLowerCase();
+    if(meta.type==='text') return '<'+tag+' class="'+cls+'">'+el.textContent.trim().slice(0,40)+'</'+tag+'>';
+    return '<'+tag+' class="'+cls+'">\n  \u2026\n</'+tag+'>';
+  }
+  computeStyle(id){
+    const el=this.nodeEl(id); const meta=this.meta(id);
+    const base={name:meta.name,type:meta.type,glyph:this.glyphFor(meta.type),tag:'div',w:0,h:0,radius:0,pad:0,bgHex:'\u2014',bgShow:false,opacity:100,hasText:meta.type==='text',colorHex:'#e7e9ee',fontSize:14,fontWeight:'500',fontFamily:'Geist',html:'',gpui:''};
+    if(!el) return base;
+    const cs=getComputedStyle(el); const bg=this.toHex(cs.backgroundColor);
+    return {
+      name:meta.name, type:meta.type, glyph:this.glyphFor(meta.type), tag:el.tagName.toLowerCase(),
+      w:el.offsetWidth, h:el.offsetHeight,
+      radius:Math.round(parseFloat(cs.borderTopLeftRadius))||0,
+      pad:Math.round(parseFloat(cs.paddingTop))||0,
+      bgHex:bg||'\u2014', bgShow:!!bg,
+      opacity:Math.round(parseFloat(cs.opacity)*100),
+      hasText:meta.type==='text',
+      colorHex:this.toHex(cs.color)||'#e7e9ee',
+      fontSize:Math.round(parseFloat(cs.fontSize)),
+      fontWeight:cs.fontWeight,
+      fontFamily:(cs.fontFamily||'Geist').split(',')[0].replace(/["']/g,''),
+      html:this.genHtml(el,id), gpui:this.genGpui(el,id),
+    };
+  }
+  selectNode(id, keepTool){
+    if(this.state.tool==='annotate' && !keepTool){ this.addAnnotation(id); return; }
+    this.setState({selectedId:id, selStyle:this.computeStyle(id)});
+  }
+  setScreen(s){ this.setState({screen:s}); if(s==='editor'){ setTimeout(()=>{ this.measureLayout(); this.selectNode(this.state.selectedId||'track-title',true); },90); } }
+  setTool(t){ this.setState({tool:t}); }
+  onCanvasClick(e){ const el=e.target.closest('[data-node-id]'); if(!el) return; this.selectNode(el.getAttribute('data-node-id')); }
+  onCanvasMove(e){ if(this.state.tool==='pan') return; const el=e.target.closest('[data-node-id]'); const id=el?el.getAttribute('data-node-id'):null; if(id!==this.state.hoverId) this.setState({hoverId:id}); }
+  onCanvasLeave(){ if(this.state.hoverId) this.setState({hoverId:null}); }
+  selectLayer(e){ const row=e.target.closest('[data-layer-id]'); if(!row) return; const id=row.getAttribute('data-layer-id'); if(this.state.tool==='annotate') this.addAnnotation(id); else this.selectNode(id,true); }
+  hoverLayer(e){ const row=e.target.closest('[data-layer-id]'); const id=row?row.getAttribute('data-layer-id'):null; if(id!==this.state.hoverId) this.setState({hoverId:id}); }
+  addAnnotation(nodeId){
+    const id=this.state.annotations.reduce((m,a)=>Math.max(m,a.id),0)+1;
+    this.setState({annotations:[...this.state.annotations,{id,nodeId,text:'',status:'draft',ai:null}], activeAnnotation:id, commentDraft:''});
+    this.log('#f3a34d','mcp','annotation #'+id+' created on '+this.meta(nodeId).name);
+  }
+  openAnnotation(e){ const b=e.target.closest('[data-ann]'); if(!b) return; const id=parseInt(b.getAttribute('data-ann')); const a=this.state.annotations.find(x=>x.id===id); this.setState({activeAnnotation:id, commentDraft:a?a.text:''}); }
+  closeAnnotation(){ this.setState({activeAnnotation:null}); }
+  onComment(e){ this.setState({commentDraft:e.target.value}); }
+  submitComment(){
+    const id=this.state.activeAnnotation; if(!id) return;
+    const draft=this.state.commentDraft;
+    this.setState({annotations:this.state.annotations.map(a=>a.id===id?{...a,text:draft,status:'thinking'}:a)});
+    this.log('#f3a34d','mcp','annotation #'+id+' stored \u2192 gpui://annotations/'+id);
+    setTimeout(()=>{
+      const a=this.state.annotations.find(x=>x.id===id); if(!a) return;
+      this.setState({annotations:this.state.annotations.map(x=>x.id===id?{...x,status:'answered',ai:this.mockReply(x)}:x)});
+      this.log('#6e7bff','ai','proposed edit for annotation #'+id);
+    },950);
+  }
+  mockReply(a){ const name=this.meta(a.nodeId).name; return {label:'Edited '+name, summary:'Drafted a change to '+name+' from your note. Review the diff and apply to the live app.'}; }
+  applyAI(){ const id=this.state.activeAnnotation; if(!id) return; this.setState({annotations:this.state.annotations.map(a=>a.id===id?{...a,status:'applied'}:a), activeAnnotation:null}); this.log('#46c98b','build','applied annotation #'+id+' \u00b7 recompiled 84ms'); }
+  setActiveState(e){ const c=e.target.closest('[data-state]'); if(c) this.setState({activeState:c.getAttribute('data-state')}); }
+  openNewComponent(){ this.setState({modal:'component'}); }
+  closeModal(){ this.setState({modal:null}); }
+  onFileClick(e){ const r=e.target.closest('[data-file]'); if(!r) return; if(r.getAttribute('data-file')==='styles.css') this.setState({modal:'styles'}); }
+  onCompName(e){ this.setState({compName:e.target.value}); }
+  onCompProps(e){ this.setState({compProps:e.target.value}); }
+  setCompFrom(e){ const c=e.target.closest('[data-cfrom]'); if(c) this.setState({compFrom:c.getAttribute('data-cfrom')}); }
+  setCompMode(e){ const c=e.target.closest('[data-cmode]'); if(c) this.setState({compMode:c.getAttribute('data-cmode')}); }
+  createComponent(){
+    const name=(this.state.compName||'Component').replace(/[^A-Za-z0-9]/g,'')||'Component';
+    this.setState({userComponents:[...this.state.userComponents,name], modal:null, leftTab:'files'});
+    this.log('#6e7bff','build','created component components/'+name+'.gpui \u00b7 registered in library');
+  }
+  setTarget(e){ const c=e.target.closest('[data-target]'); if(c) this.setState({activeTarget:c.getAttribute('data-target')}); }
+  log(c,tag,msg){ const t=new Date().toLocaleTimeString('en-GB'); this.setState({logs:[...this.state.logs,{t,c,tag,msg}].slice(-40)}); }
+
+  renderVals(){
+    const st=this.state; const m=st.measured||{};
+    const sel = st.selStyle || this.computeStyle(st.selectedId);
+
+    const tbtn=(active,annot)=>({width:'30px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'6px',cursor:'pointer',background:active?(annot?'rgba(243,163,77,0.16)':'rgba(110,123,255,0.16)'):'transparent',color:active?(annot?'#f3a34d':'var(--accent)'):'#8b91a0'});
+    const tab=(active)=>({padding:'0 13px',display:'flex',alignItems:'center',gap:'6px',fontSize:'12.5px',cursor:'pointer',color:active?'#e7e9ee':'#8b91a0',borderBottom:'2px solid '+(active?'var(--accent)':'transparent'),fontWeight:active?'600':'500'});
+    const seg=(active)=>({flex:'1',textAlign:'center',padding:'6px 0',fontSize:'11.5px',cursor:'pointer',borderRadius:'6px',fontFamily:"'Geist Mono',monospace",background:active?'#232631':'transparent',color:active?'#e7e9ee':'#8b91a0'});
+
+    const layerTree=this.layerRaw.map(([id,name,depth,hasChildren])=>{
+      const meta=this.meta(id);
+      const isSel=id===st.selectedId, isHov=id===st.hoverId && id!==st.selectedId;
+      const style={display:'flex',alignItems:'center',gap:'6px',height:'26px',borderRadius:'6px',cursor:'pointer',paddingLeft:(8+depth*14)+'px',paddingRight:'8px',color:isSel?'#e7e9ee':'#a9afbd',fontSize:'12.5px'};
+      if(isSel){ style.background='rgba(110,123,255,0.15)'; style.boxShadow='inset 2px 0 0 var(--accent)'; }
+      else if(isHov){ style.background='#20242e'; }
+      return {id,name,depth,hasChildren,isComponent:meta.type==='component',glyph:this.glyphFor(meta.type),glyphColor:meta.type==='text'?'#8fa0c8':(meta.type==='component'?'var(--accent)':'#5f6675'),style};
+    });
+    const fmap={folder:['dir','#c9a26b'],rs:['rs','#d98a6a'],gpui:['gp','#6e7bff'],css:['css','#5aa9e6'],toml:['tml','#9aa0ad']};
+    const fileRows=this.fileRaw.slice();
+    const insAt=fileRows.findIndex(r=>r[0]==='Sidebar.gpui')+1;
+    st.userComponents.forEach((n,i)=>fileRows.splice(insAt+i,0,[n+'.gpui',2,'gpui']));
+    const fileTree=fileRows.map(([name,depth,kind])=>{ const [g,gc]=fmap[kind]||['\u00b7','#9aa0ad']; return {name,depth,kind,glyph:g,glyphColor:gc,style:{display:'flex',alignItems:'center',gap:'8px',height:'25px',borderRadius:'6px',cursor:'pointer',paddingLeft:(8+depth*14)+'px',color:kind==='folder'?'#cdd2dc':'#a9afbd',fontSize:'12.5px'}}; });
+
+    const annBadges=st.annotations.map(a=>{ const r=m[a.nodeId]; if(!r) return null; const applied=a.status==='applied'; const col=applied?'#46c98b':'#f3a34d'; return {id:a.id, style:{position:'absolute',left:(r.left+r.width-11)+'px',top:(r.top-11)+'px',width:'22px',height:'22px',borderRadius:'50% 50% 50% 3px',background:col,color:'#161009',fontSize:'11px',fontWeight:'700',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',pointerEvents:'auto',boxShadow:'0 2px 9px rgba(0,0,0,0.5)',fontFamily:"'Geist Mono',monospace"}}; }).filter(Boolean);
+
+    const s=m[st.selectedId];
+    const selBoxStyle = s ? {position:'absolute',left:s.left+'px',top:s.top+'px',width:s.width+'px',height:s.height+'px',border:'1.5px solid var(--accent)',borderRadius:'3px',pointerEvents:'none',zIndex:6} : {display:'none'};
+    const hid=st.hoverId; const hv= hid && hid!==st.selectedId ? m[hid]:null;
+    const hoverBoxStyle = hv ? {position:'absolute',left:hv.left+'px',top:hv.top+'px',width:hv.width+'px',height:hv.height+'px',border:'1px solid rgba(110,123,255,0.55)',borderRadius:'3px',pointerEvents:'none',zIndex:5,background:'rgba(110,123,255,0.06)'} : {display:'none'};
+
+    const act=st.annotations.find(a=>a.id===st.activeAnnotation)||null;
+    const pr=act?m[act.nodeId]:null;
+    const popoverStyle = act&&pr ? {position:'absolute',left:(pr.left+pr.width+16)+'px',top:Math.max(6,pr.top-6)+'px',width:'278px',zIndex:30,pointerEvents:'auto'} : {display:'none'};
+    const annView = act ? {id:act.id,nodeName:this.meta(act.nodeId).name,text:act.text,status:act.status,aiSummary:act.ai?act.ai.summary:'',aiLabel:act.ai?act.ai.label:''} : {id:'',nodeName:'',text:'',status:'',aiSummary:'',aiLabel:''};
+
+    const stateChips=['Default','Hover','Pressed','Playing','Loading'].map(n=>({name:n,active:n===st.activeState,style:{padding:'6px 12px',borderRadius:'8px',fontSize:'12px',cursor:'pointer',border:'1px solid '+(n===st.activeState?'var(--accent)':'#262a35'),background:n===st.activeState?'rgba(110,123,255,0.15)':'transparent',color:n===st.activeState?'#e7e9ee':'#9aa0ad'}}));
+    const targets=[['macos','macOS','Universal .app'],['windows','Windows','x64 installer'],['linux','Linux','AppImage'],['wasm','Web','WASM + canvas']].map(([id,name,detail])=>{ const active=id===st.activeTarget; return {id,name,detail,active,targetStyle:{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:'5px',padding:'15px',borderRadius:'12px',cursor:'pointer',textAlign:'left',border:'1px solid '+(active?'var(--accent)':'#262a35'),background:active?'rgba(110,123,255,0.08)':'#14171f'}}; });
+
+    const projects=[['Aurora Player','Music \u00b7 macOS','2h ago','#6e7bff'],['Nimbus Mail','Client \u00b7 Cross-platform','Yesterday','#46c98b'],['Forge Terminal','Dev tool \u00b7 Linux','3d ago','#f3a34d'],['Pulse Dashboard','Analytics \u00b7 macOS','1w ago','#c57bff'],['Relay Chat','Messaging \u00b7 macOS','2w ago','#e6739f'],['Atlas Notes','Docs \u00b7 Cross-platform','1mo ago','#5aa9e6']].map(([name,kind,edited,ac])=>({name,kind,edited,ac}));
+    const templates=['Blank','Sidebar App','Dashboard','Settings','Onboarding'];
+
+    const logsView=st.logs.map(l=>({t:l.t,tag:l.tag,msg:l.msg,tagStyle:{flex:'0 0 58px',textTransform:'uppercase',fontSize:'10px',letterSpacing:'0.5px',color:l.c}}));
+
+    return {
+      showProjects:st.screen==='projects', showEditor:st.screen==='editor', showExport:st.screen==='export',
+      appScaleStyle:{transform:'scale('+st.canvasScale+')',transformOrigin:'center center'},
+      tool:st.tool,
+      toolSelectStyle:tbtn(st.tool==='select'), toolPanStyle:tbtn(st.tool==='pan'), toolAnnotateStyle:tbtn(st.tool==='annotate',true),
+      setScreenProjects:()=>this.setScreen('projects'), setScreenEditor:()=>this.setScreen('editor'), setScreenExport:()=>this.setScreen('export'),
+      setToolSelect:()=>this.setTool('select'), setToolPan:()=>this.setTool('pan'), setToolAnnotate:()=>this.setTool('annotate'),
+      showFilesTab:st.leftTab==='files', showLayersTab:st.leftTab==='layers',
+      leftFilesStyle:tab(st.leftTab==='files'), leftLayersStyle:tab(st.leftTab==='layers'),
+      setLeftFiles:()=>this.setState({leftTab:'files'}), setLeftLayers:()=>this.setState({leftTab:'layers'}),
+      layerTree, fileTree,
+      selectLayer:e=>this.selectLayer(e), hoverLayer:e=>this.hoverLayer(e), clearHover:()=>this.onCanvasLeave(),
+      onCanvasClick:e=>this.onCanvasClick(e), onCanvasMove:e=>this.onCanvasMove(e), onCanvasLeave:()=>this.onCanvasLeave(),
+      selBoxStyle, hoverBoxStyle, selName:sel.name, selSizeLabel: sel.w+' \u00d7 '+sel.h,
+      annBadges, openAnnotation:e=>this.openAnnotation(e), showGrid:this.props.canvasGrid!==false,
+      showPopover:!!act, popoverStyle, ann:annView,
+      annDraft:annView.status==='draft', annThinking:annView.status==='thinking', annAnswered:annView.status==='answered', annApplied:annView.status==='applied',
+      commentDraft:st.commentDraft, onComment:e=>this.onComment(e), submitComment:()=>this.submitComment(), applyAI:()=>this.applyAI(), closeAnnotation:()=>this.closeAnnotation(),
+      showConsole:st.bottomTab==='console', showTimeline:st.bottomTab==='timeline',
+      bottomConsoleStyle:tab(st.bottomTab==='console'), bottomTimelineStyle:tab(st.bottomTab==='timeline'),
+      setBottomConsole:()=>this.setState({bottomTab:'console'}), setBottomTimeline:()=>this.setState({bottomTab:'timeline'}),
+      logsView, stateChips, setActiveState:e=>this.setActiveState(e), activeState:st.activeState, mcpCount:st.annotations.length,
+      sel, hasText:sel.hasText,
+      fillSwatchStyle:{width:'16px',height:'16px',borderRadius:'4px',border:'1px solid #3a3f4c',background:sel.bgShow?sel.bgHex:'transparent',flex:'0 0 auto'},
+      colorSwatchStyle:{width:'16px',height:'16px',borderRadius:'4px',border:'1px solid #3a3f4c',background:sel.colorHex,flex:'0 0 auto'},
+      codeIsHtml:st.codeTab==='html', codeHtmlStyle:seg(st.codeTab==='html'), codeGpuiStyle:seg(st.codeTab==='gpui'), code:st.codeTab==='html'?sel.html:sel.gpui,
+      setCodeHtml:()=>this.setState({codeTab:'html'}), setCodeGpui:()=>this.setState({codeTab:'gpui'}),
+      targets, setTarget:e=>this.setTarget(e),
+      projects, templates, openProject:()=>this.setScreen('editor'),
+      openNewComponent:()=>this.openNewComponent(), closeModal:()=>this.closeModal(), onFileClick:e=>this.onFileClick(e), stop:e=>e.stopPropagation(),
+      showComponentModal:st.modal==='component', showStylesModal:st.modal==='styles', showAnyModal:!!st.modal,
+      compName:st.compName, compProps:st.compProps, onCompName:e=>this.onCompName(e), onCompProps:e=>this.onCompProps(e),
+      createComponent:()=>this.createComponent(),
+      setCompFrom:e=>this.setCompFrom(e), setCompMode:e=>this.setCompMode(e),
+      compFroms:['Selection','Blank','Paste HTML'].map(n=>({name:n,style:seg(st.compFrom===n)})),
+      compModes:['HTML / CSS','GPUI'].map(n=>({name:n,style:seg(st.compMode===n)})),
+      compStub: st.compMode==='GPUI'
+        ? 'struct '+(st.compName||'Component').replace(/[^A-Za-z0-9]/g,'')+' {\n    title: SharedString,\n    active: bool,\n}\n\nimpl Render for '+(st.compName||'Component').replace(/[^A-Za-z0-9]/g,'')+' {\n    fn render(&mut self, cx) -> impl IntoElement {\n        div().flex().gap_2()\n            '+(st.compFrom==='Selection'?'// from '+sel.name:'.child(/* ... */)')+'\n    }\n}'
+        : '<div class="'+(st.compName||'component').replace(/[^A-Za-z0-9]/g,'').toLowerCase()+'">\n'+(st.compFrom==='Selection'?'  <!-- extracted from '+sel.name+' -->\n':'')+'  \u2026\n</div>',
+      stylesCss: ':root {\n  --bg: #0b0d12;\n  --surface: #101319;\n  --text: #e7e9ee;\n  --muted: #8a90a0;\n  --accent: #6e7bff;\n  --radius: 14px;\n}\n\n.album-art {\n  border-radius: var(--radius);\n  overflow: hidden;\n  box-shadow: 0 14px 34px rgba(0,0,0,.5);\n}\n\n.play-btn {\n  width: 56px; height: 56px;\n  border-radius: 50%;\n  background: var(--accent);\n}\n.play-btn:hover { filter: brightness(1.08); }',
+    };
+  }
+}
+</script>
+</body>
+</html>

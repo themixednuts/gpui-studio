@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<body>
+<main id="welcome-canvas" aria-label="Welcome project preview">
+  <gpui-component id="app-titlebar-component" component="AppTitlebar"></gpui-component>
+  <header id="welcome-header">
+    <div id="welcome-copy">
+      <span class="kicker">LIVE NATIVE DOCUMENT · REVISION 1</span>
+      <h1 id="hero-title">Build GPUI live, entirely offline.</h1>
+      <p>Pure structure, local CSS, typed RON bindings, and a native renderer—all available offline.</p>
+    </div>
+    <div id="preview-badge"><span></span>GPUI RUNTIME</div>
+  </header>
+
+  <section id="feature-grid">
+    <article id="runtime-building-card" class="feature-card accent-card">
+      <span class="card-index">01</span>
+      <strong>Runtime building</strong>
+      <p>Edit HTML and CSS, validate the complete bundle, then atomically swap the native tree.</p>
+      <span class="card-status">NO CARGO REQUIRED</span>
+    </article>
+    <article id="local-ai-card" class="feature-card">
+      <span class="card-index">02</span>
+      <strong>Local AI control</strong>
+      <p>MCP previews stay in memory until a human or agent explicitly activates Save.</p>
+      <span class="card-status">REVISION CHECKED</span>
+    </article>
+    <article id="portable-source-card" class="feature-card">
+      <span class="card-index">03</span>
+      <strong>Portable source</strong>
+      <p>No private HTMLSwap attributes and no network dependency in the authoring contract.</p>
+      <span class="card-status">PURE HTML</span>
+    </article>
+  </section>
+
+  <section id="welcome-lower">
+    <details id="runtime-details" open>
+      <summary><span>Runtime pipeline</span><strong>HEALTHY</strong></summary>
+      <div id="pipeline-row">
+        <div><span>HTML</span><strong>Parse</strong></div>
+        <span class="pipeline-arrow">→</span>
+        <div><span>HTMLSwap</span><strong>Resolve</strong></div>
+        <span class="pipeline-arrow">→</span>
+        <div><span>GPUI</span><strong>Render</strong></div>
+      </div>
+    </details>
+    <aside id="dogfood-note">
+      <span class="kicker">DOGFOOD SESSION</span>
+      <strong>This canvas is the first Studio project.</strong>
+      <p>Use MCP to preview a revision, inspect the semantic tree, then activate Studio’s Save command.</p>
+    </aside>
+  </section>
+</main>
+</body>
+</html>

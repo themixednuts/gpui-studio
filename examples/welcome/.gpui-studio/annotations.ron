@@ -1,0 +1,106 @@
+(
+    version: 2,
+    next_id: 7,
+    annotations: [
+        (
+            id: "comment-000001",
+            target: (
+                authored_id: "root",
+                runtime_id: "native/native-component-4/root",
+                document_revision: 1,
+                captured_rect: Some((
+                    x: 252.0,
+                    y: 166.0,
+                    width: 872.0,
+                    height: 514.0,
+                )),
+            ),
+            anchor: (
+                x: 0.5,
+                y: 0.5,
+            ),
+            comment: "Keep this direct GPUI component responsive across the full canvas height.",
+            status: Done,
+        ),
+        (
+            id: "comment-000002",
+            target: (
+                authored_id: "eyebrow",
+                runtime_id: "component/native-component-1/eyebrow",
+                document_revision: 1,
+                captured_rect: Some((
+                    x: 378.0,
+                    y: 209.0,
+                    width: 229.0,
+                    height: 9.0,
+                )),
+            ),
+            anchor: (
+                x: 0.5,
+                y: 0.5,
+            ),
+            comment: "Make this eyebrow label more prominent",
+            status: InProgress,
+        ),
+        (
+            id: "comment-000004",
+            target: (
+                authored_id: "action",
+                runtime_id: "component/native-component-1/action",
+                document_revision: 1,
+                captured_rect: Some((
+                    x: 462.0,
+                    y: 255.0,
+                    width: 143.0,
+                    height: 22.0,
+                )),
+            ),
+            anchor: (
+                x: 0.5,
+                y: 0.5,
+            ),
+            comment: "Auto-saved: reduce this padding",
+            status: Done,
+        ),
+        (
+            id: "comment-000005",
+            target: (
+                authored_id: "action",
+                runtime_id: "component/native-component-1/action",
+                document_revision: 1,
+                captured_rect: Some((
+                    x: 462.0,
+                    y: 255.0,
+                    width: 143.0,
+                    height: 22.0,
+                )),
+            ),
+            anchor: (
+                x: 0.5,
+                y: 0.5,
+            ),
+            comment: "Handoff test comment",
+            status: InProgress,
+        ),
+        (
+            id: "comment-000006",
+            target: (
+                authored_id: "root",
+                runtime_id: "component/native-component-1/root",
+                document_revision: 1,
+                captured_rect: Some((
+                    x: 440.00003,
+                    y: 213.33333,
+                    width: 334.0,
+                    height: 206.0,
+                )),
+            ),
+            anchor: (
+                x: 0.5,
+                y: 0.5,
+            ),
+            comment: "Make the root padding smaller",
+            status: Open,
+        ),
+    ],
+)
