@@ -20,7 +20,7 @@ impl ProjectStore {
     /// Returns an error for missing, oversized, non-UTF-8, or root-escaping files.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, ProjectStoreError> {
         let paths = ProjectPaths::open(root)?;
-        let baseline = ProjectSnapshot::load(&paths)?.into_live_document_source();
+        let baseline = ProjectSnapshot::load(&paths)?.into_document();
         Ok(Self { paths, baseline })
     }
 
@@ -48,7 +48,7 @@ impl ProjectStore {
     ///
     /// Returns an error if any file is invalid or escaped since the project opened.
     pub fn read_disk(&self) -> Result<LiveDocumentSource, ProjectStoreError> {
-        Ok(ProjectSnapshot::load(&self.paths)?.into_live_document_source())
+        Ok(ProjectSnapshot::load(&self.paths)?.into_document())
     }
 
     /// Accept a complete source known to have just been read from these paths.

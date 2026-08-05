@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use gpui_mcp_html::OutputWindowDecorations;
+use gpui_mcp_html::Decorations;
 use tempfile::NamedTempFile;
 
 use crate::OutputDecorations;
@@ -20,10 +20,10 @@ pub(crate) fn persist_output_window_module(
     })?;
     let destination = directory.join("window.rs");
     let source = match decorations {
-        OutputDecorations::Native => OutputWindowDecorations::Native,
-        OutputDecorations::Custom => OutputWindowDecorations::Custom,
+        OutputDecorations::Native => Decorations::Native,
+        OutputDecorations::Custom => Decorations::Custom,
     }
-    .rust_module_source();
+    .module_source();
     let mut temporary =
         NamedTempFile::new_in(&directory).map_err(|source| OutputWindowError::Io {
             operation: "stage generated window module",

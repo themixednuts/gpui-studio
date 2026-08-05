@@ -6,13 +6,11 @@ use std::rc::Rc;
 
 use gpui::{
     Animation, AnimationExt as _, AnyElement, Context, FontWeight, InteractiveElement as _,
-    IntoElement as _, MouseButton, ParentElement as _, Render, SharedString, Window, div,
-    ease_out_quint, prelude::*, px, rgb, rgba,
+    IntoElement as _, MouseButton, ParentElement as _, Render, SemanticElementExt as _,
+    SemanticRole, SemanticText, SharedString, Window, div, ease_out_quint, prelude::*, px, rgb,
+    rgba,
 };
-use gpui_mcp::{
-    Automation, McpElementExt as _, MouseButton as McpMouseButton, NodeAction, NodeEvent, NodeSpec,
-    NodeState, Role, TextInfo,
-};
+use gpui_mcp::Automation;
 use serde::{Deserialize, Deserializer, Serialize};
 use tempfile::NamedTempFile;
 
@@ -42,22 +40,8 @@ pub enum ComponentPointerGesture {
         /// Window-relative y in logical pixels.
         y: f32,
     },
-    /// Semantic drag of this node ending at a window-relative position.
-    DragTo {
-        /// Window-relative destination x in logical pixels.
-        x: f32,
-        /// Window-relative destination y in logical pixels.
-        y: f32,
-    },
     /// Pointer is hovering this node (deepest node under the cursor).
     Hover,
-    /// Interpolated drag position for live placement previews.
-    DragPreview {
-        /// Window-relative interpolated pointer x in logical pixels.
-        x: f32,
-        /// Window-relative interpolated pointer y in logical pixels.
-        y: f32,
-    },
     /// Primary-button press on the deepest node under the pointer. Select-on-
     /// press (design-tool convention) is immune to the release-time hit-test
     /// fall-through that otherwise collapses clicks to the root container.
@@ -2841,48 +2825,54 @@ impl NativeNode {
         let mut element = element.id(SharedString::from(runtime_id.clone()));
         let role = self.semantic_role.map_or_else(
             || match self.kind {
-                NativeNodeKind::Text => Role::Text,
-                NativeNodeKind::Button => Role::Button,
+                NativeNodeKind::Text => SemanticRole::Text,
+                NativeNodeKind::Button => SemanticRole::Button,
                 NativeNodeKind::Column
                 | NativeNodeKind::Row
                 | NativeNodeKind::Grid
                 | NativeNodeKind::Stack
-                | NativeNodeKind::Instance => Role::Group,
-                NativeNodeKind::Titlebar => Role::Toolbar,
+                | NativeNodeKind::Instance => SemanticRole::Group,
+                NativeNodeKind::Titlebar => SemanticRole::Toolbar,
             },
-            NativeSemanticRole::mcp_role,
+            NativeSemanticRole::semantic_role,
         );
-        let mut spec = NodeSpec::new(runtime_id, role)
-            .state(NodeState {
-                enabled: !self.state.disabled,
-                selected: self.state.selected,
-                checked: self.state.checked,
-                expanded: self.state.expanded,
-                ..NodeState::default()
-            })
-            .metadata("document_model", "component")
-            .metadata("available_projections", "html,gpui")
-            .metadata("component_id", component_id)
-            .metadata("gpui_kind", format!("{:?}", self.kind).to_lowercase())
-            .metadata("authored_id", self.id.clone());
+        element = element
+            .semantic_role(role)
+            .semantic_enabled(!self.state.disabled)
+            .semantic_metadata("document_model", "component")
+            .semantic_metadata("available_projections", "html,gpui")
+            .semantic_metadata("component_id", component_id)
+            .semantic_metadata("gpui_kind", format!("{:?}", self.kind).to_lowercase())
+            .semantic_metadata("authored_id", self.id.clone());
+        if let Some(selected) = self.state.selected {
+            element = element.semantic_selected(selected);
+        }
+        if let Some(checked) = self.state.checked {
+            element = element.semantic_checked(checked);
+        }
+        if let Some(expanded) = self.state.expanded {
+            element = element.semantic_expanded(expanded);
+        }
         if let Some(referenced) = &self.instance_of {
-            spec = spec.metadata("instance_of", referenced.clone());
+            element = element.semantic_metadata("instance_of", referenced.clone());
         }
         if self.kind == NativeNodeKind::Titlebar {
-            spec = spec.metadata("semantic_component", "titlebar");
+            element = element.semantic_metadata("semantic_component", "titlebar");
         }
         if let Some(text) = &self.text {
-            spec = spec.label(text.clone()).text(TextInfo {
-                text: text.clone(),
-                ..TextInfo::default()
-            });
+            element = element
+                .accessible_name(text.clone())
+                .semantic_text(SemanticText {
+                    text: text.clone(),
+                    ..SemanticText::default()
+                });
         }
         let resolved_action = resolved_actions
             .get(&self.id)
             .or(self.action.as_ref())
             .cloned();
         if let Some(action) = &resolved_action {
-            spec = spec.metadata("action", action.clone());
+            element = element.semantic_metadata("action", action.clone());
         }
         if let Some(handler) = handler {
             let node_id = self.id.clone();
@@ -3015,63 +3005,8 @@ impl NativeNode {
                         cx.new(|_| NodeDragGhost { label })
                     });
             }
-            let action_automation = automation.clone();
-            let event_runtime_id = format!("component/{component_id}/{}", self.id);
-            spec = spec
-                .action(NodeAction::Click)
-                .action(NodeAction::Drag)
-                .action(NodeAction::Hover)
-                .on_event(move |event, window, _| {
-                    let gesture = match event {
-                        NodeEvent::Click {
-                            button: McpMouseButton::Right,
-                            ..
-                        } => {
-                            // Anchor the menu to the node's live bounds since a
-                            // semantic click has no pointer position.
-                            let anchor = action_automation
-                                .snapshot()
-                                .nodes
-                                .get(&event_runtime_id)
-                                .and_then(|node| node.bounds)
-                                .map_or((24.0, 24.0), |bounds| {
-                                    (
-                                        bounds.x + bounds.width / 2.0,
-                                        bounds.y + bounds.height / 2.0,
-                                    )
-                                });
-                            Some(ComponentPointerGesture::ContextMenu {
-                                x: anchor.0,
-                                y: anchor.1,
-                            })
-                        }
-                        NodeEvent::Click { .. } => Some(ComponentPointerGesture::Click {
-                            action: resolved_action.clone(),
-                        }),
-                        NodeEvent::Drag { to, .. } => {
-                            Some(ComponentPointerGesture::DragTo { x: to.x, y: to.y })
-                        }
-                        NodeEvent::DragMove { at, .. } => {
-                            Some(ComponentPointerGesture::DragPreview { x: at.x, y: at.y })
-                        }
-                        NodeEvent::Hover { .. } => Some(ComponentPointerGesture::Hover),
-                        _ => None,
-                    };
-                    if let Some(gesture) = gesture {
-                        // Mirror the native press-to-select path for MCP: a left
-                        // semantic click selects first (no-op in Test/Compare),
-                        // then runs the click semantics for the active mode.
-                        if matches!(gesture, ComponentPointerGesture::Click { .. }) {
-                            let _ = handler(&component, &node_id, ComponentPointerGesture::Select);
-                        }
-                        let _ = handler(&component, &node_id, gesture);
-                        action_automation
-                            .log("info", &format!("component pointer gesture on {node_id}"));
-                        window.refresh();
-                    }
-                });
         }
-        element.mcp_node(automation, spec).into_any_element()
+        element.into_any_element()
     }
 
     fn gpui_excerpt(
@@ -3163,27 +3098,22 @@ impl NativeNode {
         }
         let role = self.semantic_role.map_or_else(
             || match self.kind {
-                NativeNodeKind::Text => Role::Text,
-                NativeNodeKind::Button => Role::Button,
+                NativeNodeKind::Text => SemanticRole::Text,
+                NativeNodeKind::Button => SemanticRole::Button,
                 NativeNodeKind::Column
                 | NativeNodeKind::Row
                 | NativeNodeKind::Grid
                 | NativeNodeKind::Stack
-                | NativeNodeKind::Instance => Role::Group,
-                NativeNodeKind::Titlebar => Role::Toolbar,
+                | NativeNodeKind::Instance => SemanticRole::Group,
+                NativeNodeKind::Titlebar => SemanticRole::Toolbar,
             },
-            NativeSemanticRole::mcp_role,
+            NativeSemanticRole::semantic_role,
         );
-        let mut spec = format!(
-            "NodeSpec::new(\"component/{component_id}/{}\", Role::{role:?})",
-            self.id
-        );
+        lines.push(format!("    .id(\"component/{component_id}/{}\")", self.id));
+        lines.push(format!("    .semantic_role(SemanticRole::{role:?})"));
         if let Some(action) = resolved_actions.get(&self.id).or(self.action.as_ref()) {
-            spec.push_str(&format!(
-                ".action(NodeAction::Click).metadata(\"action\", {action:?})"
-            ));
+            lines.push(format!("    .semantic_metadata(\"action\", {action:?})"));
         }
-        lines.push(format!("    .mcp_node(automation, {spec})"));
         lines.join("\n")
     }
 
@@ -3534,22 +3464,22 @@ pub struct NativeSemanticState {
 }
 
 impl NativeSemanticRole {
-    const fn mcp_role(self) -> Role {
+    const fn semantic_role(self) -> SemanticRole {
         match self {
-            Self::Alert => Role::Alert,
-            Self::Dialog => Role::Dialog,
-            Self::Group => Role::Group,
-            Self::Listbox => Role::List,
-            Self::Menu => Role::Menu,
-            Self::MenuItem => Role::MenuItem,
-            Self::Option => Role::Option,
-            Self::ScrollArea => Role::ScrollArea,
-            Self::Slider => Role::Slider,
-            Self::TabList => Role::TabList,
-            Self::Tab => Role::Tab,
-            Self::TabPanel => Role::Group,
-            Self::Tooltip => Role::Tooltip,
-            Self::Toolbar => Role::Toolbar,
+            Self::Alert => SemanticRole::Alert,
+            Self::Dialog => SemanticRole::Dialog,
+            Self::Group => SemanticRole::Group,
+            Self::Listbox => SemanticRole::List,
+            Self::Menu => SemanticRole::Menu,
+            Self::MenuItem => SemanticRole::MenuItem,
+            Self::Option => SemanticRole::Option,
+            Self::ScrollArea => SemanticRole::ScrollArea,
+            Self::Slider => SemanticRole::Slider,
+            Self::TabList => SemanticRole::TabList,
+            Self::Tab => SemanticRole::Tab,
+            Self::TabPanel => SemanticRole::Group,
+            Self::Tooltip => SemanticRole::Tooltip,
+            Self::Toolbar => SemanticRole::Toolbar,
         }
     }
 
@@ -4866,10 +4796,9 @@ mod tests {
         assert_eq!(bindings.matches("Id(\"tab-activity\")").count(), 1);
         assert!(bindings.contains("handler: \"select_activity\""));
         let gpui = component.gpui_excerpt();
-        assert!(gpui.contains(&format!(
-            "component/{}/tab-activity\", Role::Tab).action(NodeAction::Click)",
-            component.id
-        )));
+        assert!(gpui.contains(&format!(".id(\"component/{}/tab-activity\")", component.id)));
+        assert!(gpui.contains(".semantic_role(SemanticRole::Tab)"));
+        assert!(gpui.contains(".semantic_metadata(\"action\", \"select_activity\")"));
     }
 
     #[test]

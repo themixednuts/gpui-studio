@@ -8,20 +8,20 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use gpui::{
     AnyElement, App, AppContext as _, Application, AssetSource, Bounds, Context, FocusHandle,
-    IntoElement, MouseButton, ParentElement as _, Render, SharedString, Timer, Window,
-    WindowBounds, WindowOptions, anchored, canvas, deferred, div, fill, point, prelude::*, px, rgb,
-    rgba, size, svg,
+    IntoElement, MouseButton, ParentElement as _, Render, SemanticElementExt as _, SemanticRole,
+    SemanticValue, SharedString, Timer, Window, WindowBounds, WindowOptions, anchored, canvas,
+    deferred, div, fill, point, prelude::*, px, rgb, rgba, size, svg,
 };
 use gpui_mcp::{
-    ActionOutcome, ApplicationCommandDescriptor, ApplicationCommandRequest,
-    ApplicationCommandResponse, ApplicationCommandResult, Automation, BridgeConfig, BridgeError,
-    BridgeHandle, ContextResource, ContextResourceDescriptor, ContextResourceRequest,
-    ContextResourceResponse, ErrorCode, McpElementExt as _, MouseButton as McpMouseButton,
-    NodeAction, NodeEvent, NodeSpec, Point as McpPoint, Rect, Role, UiNode, ValueInfo,
+    AppId, ApplicationCommandDescriptor, ApplicationCommandRequest, ApplicationCommandResponse,
+    ApplicationCommandResult, Automation, BridgeConfig, BridgeError, BridgeHandle, ContextResource,
+    ContextResourceDescriptor, ContextResourceRequest, ContextResourceResponse, ErrorCode,
+    NodeAction, Point as McpPoint, Rect, UiNode,
 };
 use gpui_mcp_html::{
-    ComponentNode, ComponentRegistry, HandlerId, HookRegistry, LiveHtmlSession, ProjectPaths,
-    ProjectSnapshot, ProjectWatcher, SemanticNamespace, StateBindingId, StateValue,
+    ComponentNode, ComponentRegistry, HandlerId, HookOutcome as ActionOutcome, HookRegistry,
+    LiveHtmlSession, ProjectPaths, ProjectSnapshot, ProjectWatcher, SemanticNamespace,
+    StateBindingId, StateValue,
 };
 use serde::Deserialize;
 
@@ -91,12 +91,7 @@ pub fn run(config: StudioConfig) {
                             eprintln!("could not initialize GPUI Studio: {error:#}");
                             std::process::exit(1);
                         });
-                        if let Some(bridge) = &app.bridge {
-                            eprintln!(
-                                "GPUI Studio MCP endpoint: {}",
-                                bridge.endpoint_path().display()
-                            );
-                        } else {
+                        if app.bridge.is_none() {
                             eprintln!(
                                 "GPUI Studio started without MCP; all project features remain local"
                             );
@@ -275,7 +270,7 @@ impl StudioApp {
 
     fn reload_shell(&mut self) {
         let source = ProjectSnapshot::load(self.shell_watcher.paths())
-            .map(ProjectSnapshot::into_live_document_source)
+            .map(ProjectSnapshot::into_document)
             .map(|mut source| {
                 source
                     .css
@@ -1533,10 +1528,6 @@ impl StudioState {
         }
     }
 
-    fn insert_component_instance(&self, referenced_id: &str) {
-        self.insert_component_instance_at(referenced_id, None);
-    }
-
     /// Place an instance of `referenced_id` at an explicit `(parent, index)`
     /// or near the current selection, rejecting composition cycles.
     fn insert_component_instance_at(
@@ -1895,8 +1886,8 @@ impl StudioState {
     }
 
     /// Set a declared surface size through slider-like semantic automation.
-    fn set_panel_size(&self, target: &str, size: f32) {
-        self.resizable.set_size(target, size);
+    fn set_panel_size(&self, target: &str, size: f32) -> bool {
+        self.resizable.set_size(target, size)
     }
 
     /// Reset a panel to its declared default size (double-click a resize handle).
@@ -3113,10 +3104,7 @@ impl StudioState {
                 },
             ));
         if layout.native_decorator_height > 0.0 {
-            frame = frame.child(render_native_decorator(
-                layout.native_decorator_height,
-                &self.automation,
-            ));
+            frame = frame.child(render_native_decorator(layout.native_decorator_height));
         }
         children
             .into_iter()
@@ -4430,19 +4418,6 @@ impl StudioState {
                 });
                 true
             }
-            ComponentPointerGesture::DragTo { x, y } => {
-                let drag = TreeNodeDrag {
-                    component_id: component_id.to_owned(),
-                    node_id: node_id.clone(),
-                    label: node_id,
-                };
-                self.semantic_drop_tree_node(&drag, McpPoint { x, y });
-                self.clear_drag_preview();
-                true
-            }
-            ComponentPointerGesture::DragPreview { x, y } => {
-                self.update_drag_preview(McpPoint { x, y })
-            }
             ComponentPointerGesture::Hover => {
                 let runtime = format!("component/{component_id}/{node_id}");
                 let mut hovered = self.hovered_canvas_node.borrow_mut();
@@ -4453,46 +4428,6 @@ impl StudioState {
                     true
                 }
             }
-        }
-    }
-
-    /// Authored node id of the component-tree row under a window point.
-    fn tree_row_at(&self, point: McpPoint) -> Option<String> {
-        let component_id = self.active_component_id()?;
-        let prefix = format!("component-tree/{component_id}/");
-        let tree = self.automation.snapshot();
-        tree.nodes.iter().find_map(|(id, node)| {
-            let authored = id.strip_prefix(&prefix)?;
-            let bounds = node.bounds?;
-            let inside = point.x >= bounds.x
-                && point.x <= bounds.x + bounds.width
-                && point.y >= bounds.y
-                && point.y <= bounds.y + bounds.height;
-            inside.then(|| authored.to_owned())
-        })
-    }
-
-    /// Complete a semantic (MCP) drag of a tree node: tree rows take
-    /// precedence as targets, otherwise the canvas placement engine decides.
-    fn semantic_drop_tree_node(&self, drag: &TreeNodeDrag, to: McpPoint) {
-        if let Some(target) = self.tree_row_at(to) {
-            self.drop_tree_node(drag, &target);
-        } else {
-            self.drop_tree_node_at_canvas(drag, to);
-        }
-    }
-
-    /// Complete a semantic (MCP) drag of a palette component.
-    fn semantic_drop_palette(&self, referenced_id: &str, to: McpPoint) {
-        if let Some(target) = self.tree_row_at(to) {
-            let Some(component_id) = self.active_component_id() else {
-                return;
-            };
-            let placement = self.tree_drop_placement(&component_id, None, &target);
-            self.insert_component_instance_at(referenced_id, placement);
-        } else {
-            let placement = self.canvas_drop_placement(to);
-            self.insert_component_instance_at(referenced_id, placement);
         }
     }
 
@@ -4920,10 +4855,8 @@ impl StudioState {
                 let number = SharedString::from((position + 1).to_string());
                 let user_state = self.clone();
                 let user_id = id.clone();
-                let semantic_state = self.clone();
-                let semantic_id = id.clone();
                 let badge = div()
-                    .id(SharedString::from(format!("annotation-badge-{id}")))
+                    .id(SharedString::from(format!("studio-annotation-{id}")))
                     .absolute()
                     .left(px(rect.x - viewport.x + rect.width - 11.0))
                     .top(px(rect.y - viewport.y - 11.0))
@@ -4946,19 +4879,9 @@ impl StudioState {
                         user_state.activate_annotation(&user_id);
                         window.refresh();
                     })
-                    .mcp_node(
-                        &self.automation,
-                        NodeSpec::new(format!("studio-annotation-{id}"), Role::Button)
-                            .label(format!("Annotation {number}"))
-                            .action(NodeAction::Click)
-                            .metadata("annotation_id", id)
-                            .on_event(move |event, window, _| {
-                                if matches!(event, NodeEvent::Click { .. }) {
-                                    semantic_state.activate_annotation(&semantic_id);
-                                    window.refresh();
-                                }
-                            }),
-                    );
+                    .semantic_role(SemanticRole::Button)
+                    .accessible_name(format!("Annotation {number}"))
+                    .semantic_metadata("annotation_id", id);
                 layer = layer.child(badge);
             }
 
@@ -5295,7 +5218,7 @@ impl StudioState {
         let mut candidate = self.annotations.borrow().clone();
         candidate
             .transition(id, next)
-            .map_err(|error| BridgeError::new(ErrorCode::Rejected, error.to_string()))?;
+            .map_err(|error| BridgeError::new(ErrorCode::InvalidRequest, error.to_string()))?;
         let root = self.project.borrow().root().to_owned();
         candidate
             .save(&root)
@@ -5415,7 +5338,7 @@ impl StudioState {
                 let args: ComponentGraphTarget = decode_command_arguments(arguments)?;
                 let removed = self
                     .remove_component_checked(&args.component_id)
-                    .map_err(|error| BridgeError::new(ErrorCode::Rejected, error))?;
+                    .map_err(|error| BridgeError::new(ErrorCode::InvalidRequest, error))?;
                 Ok(ApplicationCommandResult {
                     name: name.to_owned(),
                     revision: None,
@@ -6031,7 +5954,7 @@ impl StudioState {
     }
 }
 
-fn build_app(config: &StudioConfig, window: &Window, cx: &App) -> Result<StudioApp> {
+fn build_app(config: &StudioConfig, window: &mut Window, cx: &mut App) -> Result<StudioApp> {
     let shell_paths = ProjectPaths::open(&config.studio_root).context("open Studio shell")?;
     let project = ProjectStore::open(&config.project_root).context("open canvas project")?;
     let mut native_components =
@@ -6050,15 +5973,8 @@ fn build_app(config: &StudioConfig, window: &Window, cx: &App) -> Result<StudioA
 
     let bridge = if config.mcp_enabled {
         Some(
-            BridgeHandle::install(
-                window,
-                cx,
-                BridgeConfig::new(APP_ID, TITLE, TITLE)
-                    .enable_live_document()
-                    .enable_context_resources()
-                    .enable_application_commands(),
-            )
-            .context("install local MCP bridge")?,
+            BridgeHandle::install(window, cx, BridgeConfig::new(AppId::new(APP_ID)?, TITLE))
+                .context("install local MCP bridge")?,
         )
     } else {
         None
@@ -6080,39 +5996,32 @@ fn build_app(config: &StudioConfig, window: &Window, cx: &App) -> Result<StudioA
     if let Some(bridge) = &bridge {
         let resource_state = state.clone();
         bridge
-            .register_context_resource_handler(move |request, _, _| {
-                resource_state.context_resource(request)
-            })
+            .on_resource(move |request, _, _| resource_state.context_resource(request))
             .context("register Studio context resources")?;
         let command_state = state.clone();
         bridge
-            .register_application_command_handler(move |request, _, _| {
-                command_state.application_command(request)
-            })
+            .on_command(move |request, _, _| command_state.application_command(request))
             .context("register Studio application commands")?;
     }
 
     let project_source = state.project.borrow().baseline().clone();
     let project_components = project_components(&state)?;
-    let project_session = LiveHtmlSession::compile(
-        project_source,
-        automation.clone(),
-        hooks.clone().with_design_time_fallback(),
-    )
-    .context("compile project canvas")?
-    .with_components(project_components)
-    .embedded(SemanticNamespace::new("project-canvas")?);
+    let project_session =
+        LiveHtmlSession::compile(project_source, automation.clone(), hooks.clone())
+            .context("compile project canvas")?
+            .with_components(project_components)
+            .embedded(SemanticNamespace::new("project-canvas")?);
     state.attach_target(project_session.clone());
     if let Some(bridge) = &bridge {
         project_session
-            .register_mcp_preview(bridge)
+            .serve_mcp(bridge)
             .context("register project MCP preview")?;
     }
 
     let components = studio_components(&state)?;
     let mut shell_source = ProjectSnapshot::load(&shell_paths)
         .context("read Studio shell")?
-        .into_live_document_source();
+        .into_document();
     shell_source
         .css
         .push_str(&state.resolved_theme().css_overlay());
@@ -6391,7 +6300,6 @@ fn render_modal(
     title: &str,
     on_dismiss: impl Fn(&mut Window) + 'static,
     body: AnyElement,
-    automation: &Automation,
 ) -> AnyElement {
     let dismiss = Rc::new(on_dismiss);
     let backdrop_dismiss = dismiss.clone();
@@ -6454,10 +6362,8 @@ fn render_modal(
                             ),
                     )
                     .child(body)
-                    .mcp_node(
-                        automation,
-                        NodeSpec::new(format!("{id}-card"), Role::Dialog).label(title.to_owned()),
-                    ),
+                    .semantic_role(SemanticRole::Dialog)
+                    .accessible_name(title.to_owned()),
             ),
     )
     .into_any_element()
@@ -6507,7 +6413,6 @@ fn render_settings(state: &Rc<StudioState>) -> AnyElement {
         "Settings",
         move |_| dismiss_state.close_settings(),
         body,
-        &state.automation,
     )
 }
 
@@ -6576,8 +6481,6 @@ fn render_theme_dropdown(state: &Rc<StudioState>) -> AnyElement {
             let name = theme.name.clone();
             let mode = theme.mode;
             let pick_state = state.clone();
-            let event_pick_state = state.clone();
-            let event_name = name.clone();
             let label = theme_variant_label(&theme);
             list = list.child(
                 div()
@@ -6611,36 +6514,17 @@ fn render_theme_dropdown(state: &Rc<StudioState>) -> AnyElement {
                         pick_state.select_theme(&name, mode);
                         window.refresh();
                     })
-                    .mcp_node(
-                        &state.automation,
-                        NodeSpec::new(format!("theme-option-{label}"), Role::Button)
-                            .label(label.clone())
-                            .action(NodeAction::Click)
-                            .on_event(move |event, window, _| {
-                                if matches!(event, NodeEvent::Click { .. }) {
-                                    event_pick_state.select_theme(&event_name, mode);
-                                    window.refresh();
-                                }
-                            }),
-                    ),
+                    .semantic_role(SemanticRole::Option)
+                    .accessible_name(label)
+                    .semantic_selected(selected),
             );
         }
         trigger = trigger.child(list);
     }
-    let event_state = state.clone();
     trigger
-        .mcp_node(
-            &state.automation,
-            NodeSpec::new("theme-dropdown-trigger", Role::Button)
-                .label(format!("Theme: {}", state.theme_label()))
-                .action(NodeAction::Click)
-                .on_event(move |event, window, _| {
-                    if matches!(event, NodeEvent::Click { .. }) {
-                        event_state.toggle_theme_dropdown();
-                        window.refresh();
-                    }
-                }),
-        )
+        .semantic_role(SemanticRole::Combobox)
+        .accessible_name(format!("Theme: {}", state.theme_label()))
+        .semantic_expanded(open)
         .into_any_element()
 }
 
@@ -6661,7 +6545,6 @@ fn render_drawer(
     title: &str,
     on_dismiss: impl Fn(&mut Window) + 'static,
     body: AnyElement,
-    automation: &Automation,
 ) -> AnyElement {
     let dismiss = Rc::new(on_dismiss);
     let backdrop_dismiss = dismiss.clone();
@@ -6722,10 +6605,8 @@ fn render_drawer(
                             ),
                     )
                     .child(body)
-                    .mcp_node(
-                        automation,
-                        NodeSpec::new(format!("{id}-panel"), Role::Dialog).label(title.to_owned()),
-                    ),
+                    .semantic_role(SemanticRole::Dialog)
+                    .accessible_name(title.to_owned()),
             ),
     )
     .into_any_element()
@@ -6822,8 +6703,6 @@ fn render_annotations_drawer(state: &Rc<StudioState>) -> AnyElement {
         "Annotations drawer",
         &state.drawer_scroll,
         list.into_any_element(),
-        &state.automation,
-        |_, _| {},
     );
 
     let send_state = state.clone();
@@ -6876,21 +6755,9 @@ fn render_annotations_drawer(state: &Rc<StudioState>) -> AnyElement {
                     send_state.send_annotations();
                     window.refresh();
                 })
-                .mcp_node(
-                    &state.automation,
-                    NodeSpec::new("annotations-drawer-send", Role::Button)
-                        .label("Send annotations to agent")
-                        .action(NodeAction::Click)
-                        .on_event({
-                            let event_state = state.clone();
-                            move |event, window, _| {
-                                if matches!(event, NodeEvent::Click { .. }) {
-                                    event_state.send_annotations();
-                                    window.refresh();
-                                }
-                            }
-                        }),
-                ),
+                .semantic_role(SemanticRole::Button)
+                .accessible_name("Send annotations to agent")
+                .semantic_enabled(sendable),
         );
 
     let body = div()
@@ -6908,7 +6775,6 @@ fn render_annotations_drawer(state: &Rc<StudioState>) -> AnyElement {
         "Annotations",
         move |_| dismiss_state.close_annotations_drawer(),
         body,
-        &state.automation,
     )
 }
 
@@ -6938,7 +6804,6 @@ fn render_context_menu(state: &Rc<StudioState>) -> AnyElement {
             ContextMenuAction::Delete | ContextMenuAction::DeleteComponent
         );
         let click_state = state.clone();
-        let semantic_state = state.clone();
         let row = div()
             .id(SharedString::from(format!(
                 "context-menu-{}",
@@ -6960,18 +6825,8 @@ fn render_context_menu(state: &Rc<StudioState>) -> AnyElement {
                 click_state.run_context_menu_action(action);
                 window.refresh();
             })
-            .mcp_node(
-                &state.automation,
-                NodeSpec::new(format!("context-menu/{}", action.slug()), Role::MenuItem)
-                    .label(action.label())
-                    .action(NodeAction::Click)
-                    .on_event(move |event, window, _| {
-                        if matches!(event, NodeEvent::Click { .. }) {
-                            semantic_state.run_context_menu_action(action);
-                            window.refresh();
-                        }
-                    }),
-            );
+            .semantic_role(SemanticRole::MenuItem)
+            .accessible_name(action.label());
         surface = surface.child(row);
     }
     let dismiss_state = state.clone();
@@ -6982,10 +6837,9 @@ fn render_context_menu(state: &Rc<StudioState>) -> AnyElement {
             window.refresh();
         })
         .child(surface)
-        .mcp_node(
-            &state.automation,
-            NodeSpec::new("studio-context-menu", Role::Menu).label("Context menu"),
-        );
+        .id("studio-context-menu")
+        .semantic_role(SemanticRole::Menu)
+        .accessible_name("Context menu");
     deferred(
         anchored()
             .position(point(px(menu.x), px(menu.y)))
@@ -7019,49 +6873,9 @@ fn render_resize_handle(state: &Rc<StudioState>, node: &ComponentNode) -> AnyEle
             .cursor(gpui::CursorStyle::ResizeUpDown),
     };
     let payload = spec.drag();
-    let semantic_drag = payload.clone();
     let drag_state = state.clone();
     let click_state = state.clone();
-    let semantic_state = state.clone();
-    let semantic_target = target.to_owned();
-    let node_spec = NodeSpec::new(format!("resize-handle/{target}"), Role::Slider)
-        .label(format!("Resize {target} panel · double-click to reset"))
-        .description(format!(
-            "{:?} from the {:?} edge; range {:.0} to {:.0} pixels; default {:.0} pixels",
-            spec.axis, spec.edge, spec.min, spec.max, spec.default
-        ))
-        .value(ValueInfo {
-            value: format!("{:.0}", state.panel_size(target)),
-            min: Some(f64::from(spec.min)),
-            max: Some(f64::from(spec.max)),
-            step: Some(1.0),
-        })
-        .action(NodeAction::Drag)
-        .action(NodeAction::Click)
-        .action(NodeAction::SetValue)
-        .on_event(move |event, window, _| {
-            // Keep semantic automation on the same spec-driven path as native
-            // pointer drags, including every interpolated DragMove frame.
-            match event {
-                NodeEvent::Click { count, .. } if *count >= 2 => {
-                    semantic_state.reset_panel(&semantic_target);
-                }
-                NodeEvent::Drag { to, .. } => {
-                    semantic_state.resize_panel(&semantic_drag, to.x, to.y);
-                }
-                NodeEvent::DragMove { at, .. } => {
-                    semantic_state.resize_panel(&semantic_drag, at.x, at.y);
-                }
-                NodeEvent::SetValue { value } => {
-                    let Ok(size) = value.parse::<f32>() else {
-                        return;
-                    };
-                    semantic_state.set_panel_size(&semantic_target, size);
-                }
-                _ => return,
-            }
-            window.refresh();
-        });
+    let keyboard_state = state.clone();
     handle
         .hover(|style| style.bg(rgba(0x6e_7b_ff_55)))
         .on_click(move |event, window, _| {
@@ -7079,7 +6893,34 @@ fn render_resize_handle(state: &Rc<StudioState>, node: &ComponentNode) -> AnyEle
             drag_state.resize_panel(&drag, f32::from(position.x), f32::from(position.y));
             window.refresh();
         })
-        .mcp_node(&state.automation, node_spec)
+        .focusable()
+        .on_key_down(move |event, window, cx| {
+            let current = keyboard_state.panel_size(target);
+            let next = match event.keystroke.key.as_str() {
+                "home" => spec.min,
+                "end" => spec.max,
+                "left" | "down" => current - 1.0,
+                "right" | "up" => current + 1.0,
+                _ => return,
+            };
+            if keyboard_state.set_panel_size(target, next) {
+                window.refresh();
+            }
+            cx.stop_propagation();
+        })
+        .semantic_role(SemanticRole::Slider)
+        .accessible_name(format!("Resize {target} panel · double-click to reset"))
+        .accessible_description(format!(
+            "{:?} from the {:?} edge; range {:.0} to {:.0} pixels; default {:.0} pixels",
+            spec.axis, spec.edge, spec.min, spec.max, spec.default
+        ))
+        .semantic_value(SemanticValue {
+            value: format!("{:.0}", state.panel_size(target)),
+            min: Some(f64::from(spec.min)),
+            max: Some(f64::from(spec.max)),
+            step: Some(1.0),
+            editable: true,
+        })
         .into_any_element()
 }
 
@@ -7149,9 +6990,13 @@ fn render_component_palette(state: &Rc<StudioState>) -> AnyElement {
             );
         }
         if disabled {
-            let spec = NodeSpec::new(format!("component-palette/{id}"), Role::Button)
-                .label(format!("{name} (unavailable: would cycle)"));
-            container = container.child(row.mcp_node(&state.automation, spec).into_any_element());
+            container = container.child(
+                row.id(SharedString::from(format!("component-palette/{id}")))
+                    .semantic_role(SemanticRole::Button)
+                    .accessible_name(format!("{name} (unavailable: would cycle)"))
+                    .semantic_enabled(false)
+                    .into_any_element(),
+            );
             continue;
         }
         let click_state = state.clone();
@@ -7161,7 +7006,7 @@ fn render_component_palette(state: &Rc<StudioState>) -> AnyElement {
         let row = row
             .cursor_pointer()
             .hover(|style| style.bg(rgb(0x22_26_41)))
-            .id(SharedString::from(format!("component-palette-{id}")))
+            .id(SharedString::from(format!("component-palette/{id}")))
             .on_click(move |_, window, _| {
                 click_state.open_component_document(&click_id);
                 window.refresh();
@@ -7187,64 +7032,19 @@ fn render_component_palette(state: &Rc<StudioState>) -> AnyElement {
                     cx.new(|_| DragGhost { label })
                 },
             );
-        let semantic_state = state.clone();
-        let semantic_id = id.clone();
-        let semantic_row_id = format!("component-palette/{id}");
-        let semantic_row_lookup = semantic_row_id.clone();
-        let spec = NodeSpec::new(semantic_row_id, Role::Button)
-            .label(format!("Place {name} instance"))
-            .action(NodeAction::Click)
-            .action(NodeAction::Drag)
-            .metadata("component_id", id.clone())
-            .metadata("drag_to_place", "true")
-            .on_event(move |event, window, _| {
-                match event {
-                    NodeEvent::Click {
-                        button: McpMouseButton::Right,
-                        ..
-                    } => {
-                        let anchor = semantic_state
-                            .automation
-                            .snapshot()
-                            .nodes
-                            .get(&semantic_row_lookup)
-                            .and_then(|node| node.bounds)
-                            .map_or((24.0, 24.0), |bounds| {
-                                (bounds.x + bounds.width / 2.0, bounds.y + bounds.height)
-                            });
-                        *semantic_state.context_menu.borrow_mut() = Some(ContextMenuState {
-                            x: anchor.0,
-                            y: anchor.1,
-                            target: ContextMenuTarget::PaletteComponent {
-                                component_id: semantic_id.clone(),
-                            },
-                        });
-                    }
-                    // Semantic clicks (MCP) still place an instance so agents
-                    // can compose without synthesizing drag gestures.
-                    NodeEvent::Click { .. } => {
-                        semantic_state.insert_component_instance(&semantic_id);
-                    }
-                    NodeEvent::Drag { to, .. } => {
-                        semantic_state.semantic_drop_palette(&semantic_id, *to);
-                        semantic_state.clear_drag_preview();
-                    }
-                    NodeEvent::DragMove { at, .. } => {
-                        semantic_state.update_drag_preview(*at);
-                    }
-                    _ => return,
-                }
-                window.refresh();
-            });
-        container = container.child(row.mcp_node(&state.automation, spec).into_any_element());
+        container = container.child(
+            row.semantic_role(SemanticRole::Button)
+                .accessible_name(format!("Open {name}"))
+                .semantic_metadata("component_id", id)
+                .semantic_metadata("drag_to_place", "true")
+                .into_any_element(),
+        );
     }
     scroll_area(
         "component-palette-scroll",
         "Component library palette",
         &state.palette_scroll,
         container.into_any_element(),
-        &state.automation,
-        |_, _| {},
     )
     .into_any_element()
 }
@@ -7539,22 +7339,8 @@ fn render_studio_scroll_area(
         surface.label(),
         handles.handle(surface),
         content,
-        automation,
-        |_, _| {},
     )
     .into_any_element()
-}
-
-fn scroll_axis_offset(offset: f32, maximum: f32, delta: f32) -> f32 {
-    (offset - delta).clamp(-maximum, 0.0)
-}
-
-fn scroll_handle_by(handle: &gpui::ScrollHandle, delta_x: f32, delta_y: f32) {
-    let offset = handle.offset();
-    let maximum = handle.max_offset();
-    let next_x = scroll_axis_offset(f32::from(offset.x), f32::from(maximum.width), delta_x);
-    let next_y = scroll_axis_offset(f32::from(offset.y), f32::from(maximum.height), delta_y);
-    handle.set_offset(point(px(next_x), px(next_y)));
 }
 
 /// Reusable vertical scroll area — the studio's Scrollable component. Wraps
@@ -7567,34 +7353,20 @@ fn scroll_area(
     label: &str,
     handle: &gpui::ScrollHandle,
     content: AnyElement,
-    automation: &Automation,
-    on_semantic_scroll: impl Fn(f32, f32) + 'static,
 ) -> gpui::Div {
     let max_h = f32::from(handle.max_offset().height);
     let offset_from_top = -f32::from(handle.offset().y);
     let viewport_h = f32::from(handle.bounds().size.height);
-    let semantic_handle = handle.clone();
     let viewport = div()
         .id(SharedString::from(id.to_owned()))
         .size_full()
         .overflow_y_scroll()
         .track_scroll(handle)
         .child(content)
-        .mcp_node(
-            automation,
-            NodeSpec::new(id.to_owned(), Role::ScrollArea)
-                .label(label.to_owned())
-                .metadata("scroll_offset_y", format!("{offset_from_top:.1}"))
-                .metadata("scroll_max_y", format!("{max_h:.1}"))
-                .action(NodeAction::Scroll)
-                .on_event(move |event, window, _| {
-                    if let NodeEvent::Scroll { delta_x, delta_y } = event {
-                        on_semantic_scroll(*delta_x, *delta_y);
-                        scroll_handle_by(&semantic_handle, *delta_x, *delta_y);
-                        window.refresh();
-                    }
-                }),
-        );
+        .semantic_role(SemanticRole::ScrollArea)
+        .accessible_name(label.to_owned())
+        .semantic_metadata("scroll_offset_y", format!("{offset_from_top:.1}"))
+        .semantic_metadata("scroll_max_y", format!("{max_h:.1}"));
     let mut area = div().relative().flex_1().min_h_0().child(viewport);
     if max_h > 1.0 && viewport_h > 1.0 {
         let content_h = viewport_h + max_h;
@@ -7710,21 +7482,12 @@ fn render_console_log(state: &Rc<StudioState>) -> AnyElement {
 
     // Compose the reusable Scrollable component, then layer the console-specific
     // pin/unpin wheel handler and jump-to-latest control on top.
-    let semantic_state = state.clone();
     let wheel_state = state.clone();
     let mut area = scroll_area(
         "console-scroll",
         "Live event trace",
         handle,
         container.into_any_element(),
-        &state.automation,
-        move |_, delta_y| {
-            // MCP scroll deltas follow content direction: negative moves toward
-            // older entries and therefore releases the live pin.
-            if delta_y < 0.0 {
-                semantic_state.console_pinned.set(false);
-            }
-        },
     )
     .on_scroll_wheel(move |event, _, _| {
         // Native wheel deltas use GPUI's offset direction; a positive delta
@@ -7741,7 +7504,6 @@ fn render_console_log(state: &Rc<StudioState>) -> AnyElement {
     // Scroll-to-bottom control, shown only while the pin is released.
     if !pinned {
         let jump_state = state.clone();
-        let semantic_jump_state = state.clone();
         area = area.child(
             div()
                 .id("console-jump-latest")
@@ -7765,17 +7527,8 @@ fn render_console_log(state: &Rc<StudioState>) -> AnyElement {
                 .on_click(move |_, window, _| {
                     scroll_console_to_latest(&jump_state, window);
                 })
-                .mcp_node(
-                    &state.automation,
-                    NodeSpec::new("console-jump-latest", Role::Button)
-                        .label("Scroll to latest")
-                        .action(NodeAction::Click)
-                        .on_event(move |event, window, _| {
-                            if matches!(event, NodeEvent::Click { .. }) {
-                                scroll_console_to_latest(&semantic_jump_state, window);
-                            }
-                        }),
-                ),
+                .semantic_role(SemanticRole::Button)
+                .accessible_name("Scroll to latest"),
         );
     }
 
@@ -7841,23 +7594,6 @@ fn render_state_toggle_row(
             drop(runtime);
             window.refresh();
         });
-    let semantic_state = state.clone();
-    let semantic_component = component_id.to_owned();
-    let semantic_name = name.to_owned();
-    let spec = NodeSpec::new(format!("state-toggle/{component_id}/{name}"), Role::Button)
-        .label(format!("{label}: {value}"))
-        .action(NodeAction::Click)
-        .on_event(move |event, window, _| {
-            if matches!(event, NodeEvent::Click { .. }) {
-                let mut runtime = semantic_state.component_runtime_state.borrow_mut();
-                runtime
-                    .entry(semantic_component.clone())
-                    .or_default()
-                    .insert(semantic_name.clone(), (!value).to_string());
-                drop(runtime);
-                window.refresh();
-            }
-        });
     div()
         .flex()
         .w_full()
@@ -7883,7 +7619,11 @@ fn render_state_toggle_row(
                 .text_ellipsis()
                 .child(label.to_owned()),
         )
-        .child(pill.mcp_node(&state.automation, spec))
+        .child(
+            pill.semantic_role(SemanticRole::Switch)
+                .accessible_name(label.to_owned())
+                .semantic_checked(value),
+        )
         .into_any_element()
 }
 
@@ -7977,7 +7717,7 @@ fn render_state_panel(state: &Rc<StudioState>) -> AnyElement {
         .into_any_element()
 }
 
-fn render_native_decorator(height: f32, automation: &Automation) -> AnyElement {
+fn render_native_decorator(height: f32) -> AnyElement {
     let scale = (height / 32.0).clamp(0.5, 1.0);
     let platform = if cfg!(target_os = "windows") {
         "Windows 11"
@@ -8033,13 +7773,11 @@ fn render_native_decorator(height: f32, automation: &Automation) -> AnyElement {
     }
 
     decorator
-        .mcp_node(
-            automation,
-            NodeSpec::new("preview-native-decorator", Role::Group)
-                .label(format!("{platform} native window decoration preview"))
-                .metadata("platform", platform)
-                .metadata("output_policy", "native"),
-        )
+        .id("preview-native-decorator")
+        .semantic_role(SemanticRole::Group)
+        .accessible_name(format!("{platform} native window decoration preview"))
+        .semantic_metadata("platform", platform)
+        .semantic_metadata("output_policy", "native")
         .into_any_element()
 }
 
@@ -8086,11 +7824,9 @@ fn render_document_tabs(state: &Rc<StudioState>) -> AnyElement {
     }
 
     strip
-        .mcp_node(
-            &state.automation,
-            NodeSpec::new("studio-document-tabs-list", Role::TabList)
-                .label("Open editor documents"),
-        )
+        .id("studio-document-tabs-list")
+        .semantic_role(SemanticRole::TabList)
+        .accessible_name("Open editor documents")
         .into_any_element()
 }
 
@@ -8126,9 +7862,6 @@ fn render_document_tab(state: &Rc<StudioState>, id: DocumentId, active: &Documen
     let click_state = state.clone();
     let click_id = id.clone();
     let click_label = label.clone();
-    let semantic_state = state.clone();
-    let semantic_id = id.clone();
-    let semantic_label = label.clone();
     let tab = div()
         .flex()
         .h_full()
@@ -8147,31 +7880,16 @@ fn render_document_tab(state: &Rc<StudioState>, id: DocumentId, active: &Documen
         .text_color(rgb(if selected { 0xe7_e9_ee } else { 0x8b_91_a0 }))
         .cursor_pointer()
         .child(label.clone())
-        .id(SharedString::from(format!("tab-control-{tab_id}")))
+        .id(SharedString::from(tab_id))
         .on_click(move |_, window, _| {
             if click_state.activate_document(&click_id) {
                 click_state.set_status(format!("Activated {click_label} document"));
                 window.refresh();
             }
         })
-        .mcp_node(
-            &state.automation,
-            NodeSpec::new(tab_id, Role::Tab)
-                .label(label.clone())
-                .action(NodeAction::Click)
-                .state(gpui_mcp::NodeState {
-                    selected: Some(selected),
-                    ..gpui_mcp::NodeState::default()
-                })
-                .on_event(move |event, window, _| {
-                    if matches!(event, NodeEvent::Click { .. })
-                        && semantic_state.activate_document(&semantic_id)
-                    {
-                        semantic_state.set_status(format!("Activated {semantic_label} document"));
-                        window.refresh();
-                    }
-                }),
-        );
+        .semantic_role(SemanticRole::Tab)
+        .accessible_name(label.clone())
+        .semantic_selected(selected);
     let mut wrapper = div()
         .flex()
         .h(px(29.0))
@@ -8196,8 +7914,6 @@ fn render_document_tab_close(
 ) -> AnyElement {
     let close_state = state.clone();
     let close_component = component_id.to_owned();
-    let semantic_close_state = state.clone();
-    let semantic_close_component = component_id.to_owned();
     div()
         .flex()
         .w(px(25.0))
@@ -8216,29 +7932,19 @@ fn render_document_tab_close(
                 .text_color(rgb(0x74_7b_89)),
         )
         .id(SharedString::from(format!(
-            "tab-close-control-{component_id}"
+            "document-tab-close/{component_id}"
         )))
         .on_click(move |_, window, _| {
             close_state.close_component_document(&close_component);
             window.refresh();
         })
-        .mcp_node(
-            &state.automation,
-            NodeSpec::new(format!("document-tab-close/{component_id}"), Role::Button)
-                .label(format!("Close {label}"))
-                .action(NodeAction::Click)
-                .metadata("component_id", component_id)
-                .on_event(move |event, window, _| {
-                    if matches!(event, NodeEvent::Click { .. }) {
-                        semantic_close_state.close_component_document(&semantic_close_component);
-                        window.refresh();
-                    }
-                }),
-        )
+        .semantic_role(SemanticRole::Button)
+        .accessible_name(format!("Close {label}"))
+        .semantic_metadata("component_id", component_id)
         .into_any_element()
 }
 
-fn render_project_tree(state: &Rc<StudioState>, window: &mut Window, cx: &mut App) -> AnyElement {
+fn render_project_tree(state: &Rc<StudioState>, _window: &mut Window, cx: &mut App) -> AnyElement {
     if state.editing_component_graph() {
         return div().h(px(0.0)).into_any_element();
     }
@@ -8260,7 +7966,7 @@ fn render_project_tree(state: &Rc<StudioState>, window: &mut Window, cx: &mut Ap
         handle
     };
     let mut tree = div()
-        .id("project-layer-tree-control")
+        .id("project-layer-tree")
         .track_focus(&focus_handle)
         .key_context("ProjectLayers")
         .flex()
@@ -8319,7 +8025,7 @@ fn render_project_tree(state: &Rc<StudioState>, window: &mut Window, cx: &mut Ap
         let click_row = row.clone();
         let mut control = div()
             .id(SharedString::from(format!(
-                "project-layer-control-{}",
+                "project-layer/{}",
                 row.authored_id
             )))
             .flex()
@@ -8398,47 +8104,19 @@ fn render_project_tree(state: &Rc<StudioState>, window: &mut Window, cx: &mut Ap
             control = control.bg(rgb(0x1b_1f_2d));
         }
 
-        let semantic_state = state.clone();
-        let semantic_model = model.clone();
-        let semantic_row = row.clone();
-        let semantic_focus = focus_handle.clone();
-        let spec = NodeSpec::new(format!("project-layer/{}", row.authored_id), Role::TreeItem)
-            .label(row.label.clone())
-            .action(NodeAction::Click)
-            .action(NodeAction::Focus)
-            .state(gpui_mcp::NodeState {
-                selected: Some(selected),
-                expanded: row.expandable.then_some(expanded),
-                focused,
-                ..gpui_mcp::NodeState::default()
-            })
-            .metadata("runtime_id", row.runtime_id.clone())
-            .metadata("authored_id", row.authored_id.clone())
-            .metadata("depth", row.depth.to_string())
-            .metadata("position", (position + 1).to_string())
-            .metadata("set_size", rows.len().to_string())
-            .on_event(move |event, window, _| match event {
-                NodeEvent::Click { count, .. } => {
-                    semantic_state.select_project_layer(
-                        &semantic_model,
-                        &semantic_row,
-                        false,
-                        false,
-                    );
-                    if *count >= 2 && semantic_row.kind == LayerKind::Component {
-                        semantic_state.open_component_instance(&semantic_row.runtime_id);
-                    }
-                    window.refresh();
-                }
-                NodeEvent::Focus => {
-                    *semantic_state.project_tree_focus.borrow_mut() =
-                        Some(semantic_row.runtime_id.clone());
-                    window.focus(&semantic_focus);
-                    window.refresh();
-                }
-                _ => {}
-            });
-        tree = tree.child(control.mcp_node(&state.automation, spec));
+        control = control
+            .semantic_role(SemanticRole::TreeItem)
+            .accessible_name(row.label.clone())
+            .semantic_selected(selected)
+            .semantic_metadata("runtime_id", row.runtime_id.clone())
+            .semantic_metadata("authored_id", row.authored_id.clone())
+            .semantic_metadata("depth", row.depth.to_string())
+            .semantic_metadata("position", (position + 1).to_string())
+            .semantic_metadata("set_size", rows.len().to_string());
+        if row.expandable {
+            control = control.semantic_expanded(expanded);
+        }
+        tree = tree.child(control);
     }
 
     let keyboard_state = state.clone();
@@ -8502,28 +8180,13 @@ fn render_project_tree(state: &Rc<StudioState>, window: &mut Window, cx: &mut Ap
         window.refresh();
     });
 
-    let semantic_focus = focus_handle.clone();
-    tree.mcp_node(
-        &state.automation,
-        NodeSpec::new("project-layer-tree", Role::Tree)
-            .label("Project layers")
-            .action(NodeAction::Focus)
-            .state(gpui_mcp::NodeState {
-                focused: focus_handle.is_focused(window),
-                ..gpui_mcp::NodeState::default()
-            })
-            .metadata(
-                "selection_count",
-                state.multi_selection.borrow().len().to_string(),
-            )
-            .on_event(move |event, window, _| {
-                if matches!(event, NodeEvent::Focus) {
-                    window.focus(&semantic_focus);
-                    window.refresh();
-                }
-            }),
-    )
-    .into_any_element()
+    tree.semantic_role(SemanticRole::Tree)
+        .accessible_name("Project layers")
+        .semantic_metadata(
+            "selection_count",
+            state.multi_selection.borrow().len().to_string(),
+        )
+        .into_any_element()
 }
 
 /// Small badge marking a tree row whose element has an active annotation.
@@ -8561,12 +8224,10 @@ fn render_component_tree(state: &Rc<StudioState>) -> AnyElement {
     }
     rows.into_iter()
         .fold(div().flex().w_full().flex_col(), gpui::ParentElement::child)
-        .mcp_node(
-            &state.automation,
-            NodeSpec::new(format!("component-tree/{component_id}"), Role::Tree)
-                .label("Component layers")
-                .metadata("component_id", component_id),
-        )
+        .id(SharedString::from(format!("component-tree/{component_id}")))
+        .semantic_role(SemanticRole::Tree)
+        .accessible_name("Component layers")
+        .semantic_metadata("component_id", component_id)
         .into_any_element()
 }
 
@@ -8689,7 +8350,7 @@ fn append_component_tree_row(
                 .child(label.clone()),
         )
         .id(SharedString::from(format!(
-            "component-tree-control-{component_id}-{}",
+            "component-tree/{component_id}/{}",
             node.id
         )))
         .on_click(move |_, window, _| {
@@ -8771,69 +8432,17 @@ fn append_component_tree_row(
     if selected {
         row = row.bg(rgb(0x22_26_41));
     }
-    let semantic_state = state.clone();
-    let semantic_component = component_id.to_owned();
-    let semantic_node = node.id.clone();
-    let semantic_label = label.clone();
-    let semantic_row_id = format!("component-tree/{component_id}/{}", node.id);
-    let semantic_row_lookup = semantic_row_id.clone();
-    let spec = NodeSpec::new(semantic_row_id, Role::TreeItem)
-        .label(label)
-        .action(NodeAction::Click)
-        .action(NodeAction::Drag)
-        .state(gpui_mcp::NodeState {
-            selected: Some(selected),
-            expanded: (!node.children.is_empty()).then_some(expanded),
-            ..gpui_mcp::NodeState::default()
-        })
-        .metadata("component_id", component_id)
-        .metadata("component_node", node.id.clone())
-        .metadata("target_runtime_id", target_id)
-        .on_event(move |event, window, _| {
-            match event {
-                NodeEvent::Click {
-                    button: McpMouseButton::Right,
-                    ..
-                } => {
-                    semantic_state.select_component_node(&semantic_component, &semantic_node);
-                    let anchor = semantic_state
-                        .automation
-                        .snapshot()
-                        .nodes
-                        .get(&semantic_row_lookup)
-                        .and_then(|node| node.bounds)
-                        .map_or((24.0, 24.0), |bounds| {
-                            (bounds.x + bounds.width / 2.0, bounds.y + bounds.height)
-                        });
-                    *semantic_state.context_menu.borrow_mut() = Some(ContextMenuState {
-                        x: anchor.0,
-                        y: anchor.1,
-                        target: ContextMenuTarget::ComponentNode {
-                            component_id: semantic_component.clone(),
-                            node_id: semantic_node.clone(),
-                        },
-                    });
-                }
-                NodeEvent::Click { .. } => {
-                    semantic_state.select_component_node(&semantic_component, &semantic_node);
-                }
-                NodeEvent::Drag { to, .. } => {
-                    let drag = TreeNodeDrag {
-                        component_id: semantic_component.clone(),
-                        node_id: semantic_node.clone(),
-                        label: semantic_label.clone(),
-                    };
-                    semantic_state.semantic_drop_tree_node(&drag, *to);
-                    semantic_state.clear_drag_preview();
-                }
-                NodeEvent::DragMove { at, .. } => {
-                    semantic_state.update_drag_preview(*at);
-                }
-                _ => return,
-            }
-            window.refresh();
-        });
-    rows.push(row.mcp_node(&state.automation, spec).into_any_element());
+    row = row
+        .semantic_role(SemanticRole::TreeItem)
+        .accessible_name(label)
+        .semantic_selected(selected)
+        .semantic_metadata("component_id", component_id)
+        .semantic_metadata("component_node", node.id.clone())
+        .semantic_metadata("target_runtime_id", target_id);
+    if !node.children.is_empty() {
+        row = row.semantic_expanded(expanded);
+    }
+    rows.push(row.into_any_element());
     if expanded {
         for child in &node.children {
             append_component_tree_row(rows, state, component_id, child, depth.saturating_add(1));
@@ -10607,7 +10216,7 @@ fn graph_bridge_error(error: GraphError) -> BridgeError {
     let code = match error {
         GraphError::Conflict { .. } => ErrorCode::StaleRevision,
         GraphError::MissingNode(_) => ErrorCode::NotFound,
-        _ => ErrorCode::Rejected,
+        _ => ErrorCode::InvalidRequest,
     };
     BridgeError::new(code, error.to_string())
 }
@@ -11002,7 +10611,7 @@ mod tests {
     use super::{
         DragPreviewState, StudioScrollHandles, component_logic_transitions,
         component_preset_bindings, html_element_excerpt, initial_selection, parse_component_preset,
-        render_studio_scroll_area, scroll_axis_offset, studio_application_commands,
+        render_studio_scroll_area, studio_application_commands,
     };
     use crate::authoring::component_logic_guard_matches;
     use crate::{AuthoringBackend, ComponentPreset, NativeComponentLibrary};
@@ -11036,14 +10645,6 @@ mod tests {
         let high = drag_preview(2, 99, 4);
         assert_eq!(high.effective_index(), 4);
         assert_eq!(high.position_label(), (5, 5));
-    }
-
-    #[test]
-    fn semantic_scroll_delta_uses_gpui_negative_offsets() {
-        assert_eq!(scroll_axis_offset(-80.0, 300.0, 40.0), -120.0);
-        assert_eq!(scroll_axis_offset(-80.0, 300.0, -40.0), -40.0);
-        assert_eq!(scroll_axis_offset(-280.0, 300.0, 80.0), -300.0);
-        assert_eq!(scroll_axis_offset(-20.0, 300.0, -80.0), 0.0);
     }
 
     #[test]
@@ -11273,7 +10874,7 @@ mod tests {
                     "(version: 1, bindings: [])",
                 ),
                 automation.clone(),
-                HookRegistry::new().with_design_time_fallback(),
+                HookRegistry::new(),
             ),
             "scroll surface fixture should compile",
         )
@@ -11325,7 +10926,7 @@ mod tests {
                     include_str!("../examples/welcome/ui/app.bindings.ron"),
                 ),
                 automation.clone(),
-                HookRegistry::new().with_design_time_fallback(),
+                HookRegistry::new(),
             ),
             "welcome project should compile",
         )
@@ -11400,10 +11001,10 @@ mod tests {
                 source(
                     include_str!("../ui/app.html"),
                     include_str!("../ui/app.css"),
-                    include_str!("../ui/app.bindings.ron"),
+                    "(version: 1, bindings: [])",
                 ),
                 automation.clone(),
-                HookRegistry::new().with_design_time_fallback(),
+                HookRegistry::new(),
             ),
             "Studio shell should compile",
         )

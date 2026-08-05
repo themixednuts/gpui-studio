@@ -14,8 +14,8 @@ anyhow = "1.0.100"
 clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"
 gpui = "0.2.2"
-gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "30124cb7d41974ad8be88cd5c683fc248577a872" }
-gpui-mcp-html = { git = "https://github.com/themixednuts/gpui-mcp", rev = "30124cb7d41974ad8be88cd5c683fc248577a872", features = ["dev-watch"] }
+gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "668896ff66f982544925ace3fdf555616beb8f65" }
+gpui-mcp-html = { git = "https://github.com/themixednuts/gpui-mcp", rev = "668896ff66f982544925ace3fdf555616beb8f65", features = ["dev-watch"] }
 ron = "0.12.2"
 notify = "8.2.0"
 rstar = "0.13.0"
@@ -31,7 +31,7 @@ gpui = { version = "0.2.2", features = ["test-support"] }
 [patch.crates-io]
 # gpui-mcp calls GPUI 0.2.2's public Window::dispatch_event API. The published crate
 # accidentally keeps that method's return type private; this patch changes only its visibility.
-gpui = { git = "https://github.com/themixednuts/gpui-mcp", rev = "30124cb7d41974ad8be88cd5c683fc248577a872" }
+gpui = { git = "https://github.com/themixednuts/gpui-mcp", rev = "668896ff66f982544925ace3fdf555616beb8f65" }
 
 [lints.rust]
 unsafe_code = "forbid"
