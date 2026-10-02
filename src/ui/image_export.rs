@@ -293,6 +293,7 @@ impl Studio {
             unsettled: std::cell::Cell::new(false),
             measured: &measured,
             texts: Some(&job.texts),
+            morph: None,
         };
         let element = painter.artboard(root)?;
         let unsettled = painter.unsettled.get();

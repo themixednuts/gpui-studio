@@ -424,9 +424,50 @@ pub fn artboard_document(doc: &Document, root: NodeId) -> String {
     let variables = super::variables::root_rule(&doc.variables)
         .map(|rule| format!("\n{}", rule.replace("</", "<\\/")))
         .unwrap_or_default();
+    let (transitions, script) = prototype_runtime(doc);
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n  <style>*, *::before, *::after {{ box-sizing: border-box; }} body {{ margin: 0; }}{variables}</style>\n</head>\n<body>\n{body}</body>\n</html>\n"
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n  <style>*, *::before, *::after {{ box-sizing: border-box; }} body {{ margin: 0; }}\n@view-transition {{ navigation: auto; }}{transitions}{variables}</style>\n</head>\n<body>\n{body}{script}</body>\n</html>\n"
     )
+}
+
+/// Marks the generated prototype script, which import drops and save
+/// regenerates.
+pub const PROTOTYPE_SCRIPT_MARKER: &str = "data-studio-prototype";
+
+/// View Transitions for prototype links in browsers: slide keyframes keyed by
+/// view-transition types, and a script that turns `data-link` clicks into
+/// navigations between artboard files. Empty when the design has no links.
+fn prototype_runtime(doc: &Document) -> (String, String) {
+    let has_links = (0..doc.pages.len()).any(|page| !doc.page_links(page).is_empty());
+    if !has_links {
+        return (String::new(), String::new());
+    }
+    let css = "
+@keyframes studio-in-from-right { from { transform: translateX(35%); opacity: 0; } }
+@keyframes studio-out-to-left { to { transform: translateX(-35%); opacity: 0; } }
+@keyframes studio-in-from-left { from { transform: translateX(-35%); opacity: 0; } }
+@keyframes studio-out-to-right { to { transform: translateX(35%); opacity: 0; } }
+html:active-view-transition-type(slide-left)::view-transition-new(root) { animation: 260ms ease-out both studio-in-from-right; }
+html:active-view-transition-type(slide-left)::view-transition-old(root) { animation: 260ms ease-out both studio-out-to-left; }
+html:active-view-transition-type(slide-right)::view-transition-new(root) { animation: 260ms ease-out both studio-in-from-left; }
+html:active-view-transition-type(slide-right)::view-transition-old(root) { animation: 260ms ease-out both studio-out-to-right; }"
+        .to_owned();
+    let files: serde_json::Map<String, serde_json::Value> = doc
+        .artboards()
+        .map(|a| {
+            (
+                a.root.to_string(),
+                serde_json::Value::String(a.file.clone()),
+            )
+        })
+        .collect();
+    let files = serde_json::Value::Object(files)
+        .to_string()
+        .replace("</", "<\\/");
+    let script = format!(
+        "<script {PROTOTYPE_SCRIPT_MARKER}>\n(() => {{\n  const files = {files};\n  const key = \"studio-transition\";\n  const reverse = {{ \"slide-left\": \"slide-right\", \"slide-right\": \"slide-left\" }};\n  document.addEventListener(\"click\", (event) => {{\n    const link = event.target.closest(\"[data-link]\");\n    if (!link) return;\n    const transition = link.dataset.transition || \"instant\";\n    event.preventDefault();\n    if (link.dataset.link === \"back\") {{\n      sessionStorage.setItem(key, reverse[transition] || transition);\n      history.back();\n    }} else if (files[link.dataset.link]) {{\n      sessionStorage.setItem(key, transition);\n      location.href = files[link.dataset.link];\n    }}\n  }});\n  addEventListener(\"pagereveal\", (event) => {{\n    const transition = sessionStorage.getItem(key);\n    sessionStorage.removeItem(key);\n    if (!event.viewTransition || !transition) return;\n    if (transition === \"instant\") event.viewTransition.skipTransition();\n    else if (transition !== \"dissolve\") event.viewTransition.types.add(transition);\n  }});\n}})();\n</script>\n"
+    );
+    (css, script)
 }
 
 fn open_tag(doc: &Document, node: &Node, tag: &str, options: ExportOptions) -> String {
@@ -541,6 +582,45 @@ mod tests {
     use super::*;
 
     const KEEP: ImportOptions = ImportOptions { keep_ids: true };
+
+    #[test]
+    fn prototype_links_become_view_transition_navigations_in_browsers() {
+        use crate::model::prototype::{LINK_ATTR, TRANSITION_ATTR};
+        let mut doc = Document::new();
+        let home = doc.create_artboard(0, "Home", (0.0, 0.0), (400.0, 300.0));
+        let detail = doc.create_artboard(0, "Detail", (500.0, 0.0), (400.0, 300.0));
+        let plain = artboard_document(&doc, home);
+        assert!(plain.contains("@view-transition { navigation: auto; }"));
+        assert!(!plain.contains("<script"), "no runtime without links");
+        let button = doc.new_element("button");
+        doc.attach(button, home, None).unwrap();
+        let node = doc.get_mut(button).unwrap();
+        node.set_attr(LINK_ATTR, &detail.to_string());
+        node.set_attr(TRANSITION_ATTR, "slide-left");
+        let html = artboard_document(&doc, home);
+        let detail_file = doc.artboard_of(detail).unwrap().file.clone();
+        assert!(
+            html.contains(&format!("\"{detail}\":\"{detail_file}\"")),
+            "{html}"
+        );
+        assert!(html.contains("active-view-transition-type(slide-left)"));
+        assert!(html.contains("event.viewTransition.types.add(transition)"));
+        assert!(html.contains("data-link=\"n"));
+        // Re-importing drops the generated script and keeps the link.
+        let mut again = Document::new();
+        let root = parse_document(&mut again, &html, ImportOptions { keep_ids: true });
+        assert!(
+            again
+                .descendants(root)
+                .iter()
+                .all(|id| again.get(*id).unwrap().tag() != "script")
+        );
+        let reimported = again.children(root)[0];
+        assert_eq!(
+            again.get(reimported).unwrap().attr(TRANSITION_ATTR),
+            Some("slide-left")
+        );
+    }
 
     #[test]
     fn round_trips_a_document_with_ids() {

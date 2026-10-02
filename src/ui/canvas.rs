@@ -2260,6 +2260,7 @@ impl Studio {
             unsettled: std::cell::Cell::new(false),
             measured: &measured,
             texts: None,
+            morph: None,
         };
         let mut artboards = Vec::new();
         let mut labels = Vec::new();

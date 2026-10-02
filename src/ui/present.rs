@@ -39,6 +39,25 @@ pub(crate) struct Present {
     flash: bool,
     hovering_link: bool,
     focus: FocusHandle,
+    /// Window positions of the previous screen's named layers
+    /// (`view-transition-name`), while the next screen is being measured.
+    morph_from: Option<std::collections::HashMap<String, gpui_kit::Point<gpui_kit::Pixels>>>,
+    /// Offsets (screen px) shared elements animate away from.
+    morph: std::collections::HashMap<NodeId, (f32, f32)>,
+}
+
+/// A layer's `view-transition-name`, unless `none`.
+fn transition_name(doc: &crate::model::Document, id: NodeId) -> Option<String> {
+    let name = doc.get(id)?.style.get("view-transition-name")?.trim();
+    (!name.is_empty() && name != "none").then(|| name.to_owned())
+}
+
+impl Present {
+    /// Shared elements currently gliding into place.
+    #[cfg(test)]
+    pub(crate) fn morphing(&self) -> usize {
+        self.morph.len()
+    }
 }
 
 impl Studio {
@@ -70,6 +89,8 @@ impl Studio {
             flash: false,
             hovering_link: false,
             focus,
+            morph_from: None,
+            morph: std::collections::HashMap::new(),
         });
         cx.notify();
     }
@@ -84,9 +105,23 @@ impl Studio {
     }
 
     fn present_go(&mut self, target: LinkTarget, transition: Transition, cx: &mut Context<Self>) {
+        let doc = &self.editor.doc;
+        let named: std::collections::HashMap<String, gpui_kit::Point<gpui_kit::Pixels>> =
+            match &self.present {
+                Some(present) => {
+                    let layout = present.layout.borrow();
+                    doc.descendants(present.current)
+                        .into_iter()
+                        .filter_map(|id| Some((transition_name(doc, id)?, layout.get(&id)?.origin)))
+                        .collect()
+                }
+                None => return,
+            };
         let Some(present) = &mut self.present else {
             return;
         };
+        present.morph.clear();
+        present.morph_from = (!named.is_empty()).then_some(named);
         match target {
             LinkTarget::Artboard(board) if board != present.current => {
                 present.history.push(present.current);
@@ -159,6 +194,43 @@ impl Studio {
             return div().into_any_element();
         }
         let current = present.current;
+        // Shared elements: one hidden frame lays the new screen out, then the
+        // matching layers start where they were on the previous screen.
+        let mut measuring = false;
+        if let Some(present) = &mut self.present
+            && let Some(from) = &present.morph_from
+        {
+            let layout = present.layout.borrow();
+            let pairs: Vec<(
+                NodeId,
+                gpui_kit::Point<gpui_kit::Pixels>,
+                gpui_kit::Point<gpui_kit::Pixels>,
+            )> = doc
+                .descendants(current)
+                .into_iter()
+                .filter_map(|id| {
+                    let name = transition_name(doc, id)?;
+                    Some((id, *from.get(&name)?, layout.get(&id)?.origin))
+                })
+                .collect();
+            let laid_out = layout.contains_key(&current);
+            drop(layout);
+            if laid_out {
+                present.morph = pairs
+                    .into_iter()
+                    .map(|(id, old, new)| {
+                        (id, ((old.x - new.x).as_f32(), (old.y - new.y).as_f32()))
+                    })
+                    .collect();
+                present.morph_from = None;
+                present.generation += 1;
+            } else {
+                measuring = true;
+            }
+        }
+        let Some(present) = &self.present else {
+            return div().into_any_element();
+        };
         let viewport = window.viewport_size();
         let (w, h) = self
             .canvas
@@ -196,8 +268,12 @@ impl Studio {
             unsettled: std::cell::Cell::new(false),
             measured: &measured,
             texts: None,
+            morph: (!present.morph.is_empty()).then_some((&present.morph, present.generation)),
         };
         let screen = painter.artboard(current);
+        if measuring {
+            window.request_animation_frame();
+        }
         if painter.unsettled.get() {
             cx.on_next_frame(window, |_, _, cx| cx.notify());
         }
@@ -207,6 +283,7 @@ impl Studio {
         let stage = div()
             .relative()
             .shadow_lg()
+            .when(measuring, |this| this.opacity(0.0))
             .children(screen)
             .with_animation(
                 SharedString::from(format!("present-{generation}")),
@@ -519,6 +596,27 @@ impl Studio {
                 )
                 .child(target_menu)
                 .when(link.is_some(), |this| this.child(transitions)),
+        );
+        panel = panel.child(
+            v_flex()
+                .px_3()
+                .py_2p5()
+                .gap_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Shared element"),
+                )
+                .child(self.labeled("Name", super::inspector::Field::TransitionName, cx))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Layers with the same view-transition-name on two screens morph between them when presenting and in browsers."),
+                ),
         );
         panel.into_any_element()
     }

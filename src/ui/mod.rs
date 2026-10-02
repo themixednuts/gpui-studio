@@ -811,6 +811,13 @@ mod tests {
         assert!(project.join("artboards/assets/pasted-image.png").exists());
     }
 
+    fn doc_h1(doc: &crate::model::Document, root: NodeId) -> NodeId {
+        doc.descendants(root)
+            .into_iter()
+            .find(|id| doc.get(*id).is_some_and(|n| n.tag() == "h1"))
+            .expect("headline")
+    }
+
     #[gpui_kit::test]
     fn presenting_follows_prototype_links(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -841,6 +848,18 @@ mod tests {
                         crate::model::prototype::Transition::Dissolve,
                     )
                     .expect("link");
+                // The headline is a shared element on both screens.
+                let (from, to) = (
+                    doc_h1(&s.editor.doc, desktop),
+                    doc_h1(&s.editor.doc, mobile),
+                );
+                s.editor
+                    .set_styles(
+                        &[from, to],
+                        &[("view-transition-name".into(), Some("headline".into()))],
+                        None,
+                    )
+                    .expect("name");
                 s.editor.select([desktop]);
                 (desktop, mobile, button)
             })
@@ -865,9 +884,13 @@ mod tests {
         cx.run_until_parked();
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
+            window.render_frame(cx);
+            let present = studio.read(cx).present.as_ref().expect("presenting");
+            assert_eq!(present.current, mobile);
             assert_eq!(
-                studio.read(cx).present.as_ref().map(|p| p.current),
-                Some(mobile)
+                present.morphing(),
+                1,
+                "the shared headline glides into place"
             );
             window.press("left", cx);
         })

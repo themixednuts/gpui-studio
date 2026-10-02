@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::{
-    AbsoluteLength, AlignItems, AnyElement, BorderStyle, Bounds, BoxShadow, DefiniteLength, Div,
-    FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement, Length as GLength, ObjectFit,
-    ParentElement as _, Pixels, SharedString, Stateful, StrikethroughStyle, Styled as _,
-    StyledImage as _, StyledText, UnderlineStyle, canvas, div, img, point, prelude::*, px,
-    relative,
+    AbsoluteLength, AlignItems, AnimationExt as _, AnyElement, BorderStyle, Bounds, BoxShadow,
+    DefiniteLength, Div, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement,
+    Length as GLength, ObjectFit, ParentElement as _, Pixels, SharedString, Stateful,
+    StrikethroughStyle, Styled as _, StyledImage as _, StyledText, UnderlineStyle, canvas, div,
+    img, point, prelude::*, px, relative,
 };
 
 use crate::model::grid::{ColumnPlacement, Track, TrackList, place};
@@ -116,6 +116,9 @@ pub(crate) struct Painter<'a> {
     pub measured: &'a HashMap<NodeId, Bounds<Pixels>>,
     /// When set, text layers record their laid-out text here (image export).
     pub texts: Option<&'a RefCell<HashMap<NodeId, TextCapture>>>,
+    /// Shared-element offsets (screen px) to animate away, and a key that
+    /// restarts the animation.
+    pub morph: Option<(&'a HashMap<NodeId, (f32, f32)>, usize)>,
 }
 
 /// A text layer's GPUI layout, kept for image export.
@@ -288,6 +291,13 @@ impl Painter<'_> {
         // Agents find layers by name through the semantic tree.
         let mut el = div()
             .id(element_id(id))
+            .role(match tag {
+                "img" => gpui_kit::Role::Image,
+                "button" => gpui_kit::Role::Button,
+                "a" => gpui_kit::Role::Link,
+                _ if self.doc.is_text_layer(id) => gpui_kit::Role::Paragraph,
+                _ => gpui_kit::Role::Group,
+            })
             .aria_label(self.doc.display_name(id))
             .aria_description(format!("<{tag}> layer {id}"));
         let mut emulated_grid = false;
@@ -605,7 +615,25 @@ impl Painter<'_> {
                 }
             }
         }
-        el.child(self.probe(id)).into_any_element()
+        let el = el.child(self.probe(id));
+        // Shared-element transition: glide from the previous screen's spot.
+        if let Some((offsets, generation)) = self.morph
+            && let Some((dx, dy)) = offsets.get(&id).copied()
+        {
+            return el
+                .with_animation(
+                    SharedString::from(format!("morph-{id}-{generation}")),
+                    gpui_kit::Animation::new(std::time::Duration::from_millis(320))
+                        .with_easing(gpui_kit::ease_in_out),
+                    move |el, t| {
+                        el.relative()
+                            .left(px(dx * (1.0 - t)))
+                            .top(px(dy * (1.0 - t)))
+                    },
+                )
+                .into_any_element();
+        }
+        el.into_any_element()
     }
 
     fn image(&self, node: &Node, c: &Computed) -> AnyElement {
@@ -688,6 +716,7 @@ impl Painter<'_> {
         let height = c.height.px().or_else(|| attr_px("height")).unwrap_or(width);
         let mut el = div()
             .id(element_id(id))
+            .role(gpui_kit::Role::Image)
             .aria_label(self.doc.display_name(id))
             .aria_description(format!("<svg> layer {id}"))
             .relative()

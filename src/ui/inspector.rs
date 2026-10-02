@@ -28,7 +28,7 @@ use crate::presets::ARTBOARD_PRESETS;
 
 /// Text-entry properties.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum Field {
+pub(crate) enum Field {
     Name,
     X,
     Y,
@@ -58,10 +58,11 @@ pub(super) enum Field {
     Css,
     ConnectionLabel,
     ConnectionColor,
+    TransitionName,
 }
 
 impl Field {
-    const ALL: [Self; 29] = [
+    const ALL: [Self; 30] = [
         Self::Name,
         Self::X,
         Self::Y,
@@ -91,6 +92,7 @@ impl Field {
         Self::Css,
         Self::ConnectionLabel,
         Self::ConnectionColor,
+        Self::TransitionName,
     ];
 }
 
@@ -301,6 +303,10 @@ impl Studio {
             Field::Src => node.and_then(|n| n.attr("src")).unwrap_or("").to_owned(),
             Field::Href => node.and_then(|n| n.attr("href")).unwrap_or("").to_owned(),
             Field::Css => node.map(|n| n.style.to_css()).unwrap_or_default(),
+            Field::TransitionName => node
+                .and_then(|n| n.style.get("view-transition-name"))
+                .unwrap_or("")
+                .to_owned(),
         }
     }
 
@@ -613,6 +619,22 @@ impl Studio {
             Field::Css => {
                 let _ = self.editor.set_style_text(id, value, Some(&key));
             }
+            Field::TransitionName => {
+                // A CSS <custom-ident>: letters, digits, '-' and '_'.
+                let name: String = value
+                    .trim()
+                    .chars()
+                    .map(|c| {
+                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                            c
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect();
+                let v = (!name.is_empty() && name != "none").then_some(name);
+                self.style_change(vec![("view-transition-name", v)], &key, window, cx);
+            }
             Field::ConnectionLabel | Field::ConnectionColor => {}
         }
         cx.notify();
@@ -728,7 +750,12 @@ impl Studio {
             )
     }
 
-    fn labeled(&self, label: &'static str, field: Field, cx: &Context<Self>) -> AnyElement {
+    pub(crate) fn labeled(
+        &self,
+        label: &'static str,
+        field: Field,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         self.field_box(label, field, cx).into_any_element()
     }
 
