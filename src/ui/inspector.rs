@@ -1143,6 +1143,136 @@ impl Studio {
         )
     }
 
+    /// Breakpoints for artboards, constraints for absolutely positioned layers.
+    fn render_responsive_section(&self, id: NodeId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::editor::{BREAKPOINT_ATTR, Pin};
+        let theme = cx.theme().clone();
+        let doc = &self.editor.doc;
+        if doc.is_artboard(id) {
+            if let Some(width) = doc.get(id).and_then(|n| n.attr(BREAKPOINT_ATTR)) {
+                let main = doc.main_of(id);
+                return Some(
+                    self.section("Breakpoint", cx)
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(format!(
+                                    "{width}px version of {}. Changes here stay at this width (exported as a media query); everything else follows the main artboard.",
+                                    main.map_or_else(|| "a deleted artboard".to_owned(), |m| doc.display_name(m))
+                                )),
+                        )
+                        .into_any_element(),
+                );
+            }
+            let existing = self.editor.breakpoints(id);
+            let mut row = h_flex().gap_1p5().flex_wrap();
+            for (label, width) in [("Tablet", 768.0_f32), ("Mobile", 390.0)] {
+                let taken = existing.iter().any(|(_, w)| (*w - width).abs() < 0.5);
+                row = row.child(
+                    Button::new(SharedString::from(format!("breakpoint-{label}")))
+                        .xsmall()
+                        .outline()
+                        .icon(Icon::new(Lucide::Plus))
+                        .label(format!("{label} {}", crate::model::style::fmt_num(width)))
+                        .disabled(taken)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(bp) =
+                                this.apply(window, cx, |e| e.add_breakpoint(id, width))
+                            {
+                                this.reveal(bp, cx);
+                            }
+                        })),
+                );
+            }
+            let mut section = self.section("Breakpoints", cx).child(row);
+            for (bp, width) in existing {
+                section = section.child(
+                    h_flex()
+                        .id(SharedString::from(format!("breakpoint-row-{bp}")))
+                        .gap_2()
+                        .text_xs()
+                        .cursor_pointer()
+                        .child(
+                            Icon::new(Lucide::Smartphone)
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(format!("{}px", crate::model::style::fmt_num(width)))
+                        .child(
+                            div()
+                                .text_color(theme.muted_foreground)
+                                .child(self.editor.doc.display_name(bp)),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.editor.select([bp]);
+                            this.reveal(bp, cx);
+                            this.inspector.invalidate();
+                            cx.notify();
+                        })),
+                );
+            }
+            return Some(section.into_any_element());
+        }
+        let (h, v) = self.editor.constraints(id)?;
+        let pins = |vertical: bool| {
+            if vertical {
+                [
+                    (Pin::Start, "Top"),
+                    (Pin::End, "Bottom"),
+                    (Pin::Both, "Both"),
+                    (Pin::Center, "Center"),
+                ]
+            } else {
+                [
+                    (Pin::Start, "Left"),
+                    (Pin::End, "Right"),
+                    (Pin::Both, "Both"),
+                    (Pin::Center, "Center"),
+                ]
+            }
+        };
+        let mut section = self.section("Constraints", cx);
+        for (vertical, current) in [(false, h), (true, v)] {
+            let mut group = self.segment_group(cx).flex_1();
+            for (pin, label) in pins(vertical) {
+                group = group.child(self.segment(
+                    format!("pin-{vertical}-{label}"),
+                    label,
+                    None,
+                    current == pin,
+                    if vertical {
+                        "Vertical constraint"
+                    } else {
+                        "Horizontal constraint"
+                    },
+                    cx,
+                    move |this, window, cx| {
+                        let (h, v) = if vertical {
+                            (None, Some(pin))
+                        } else {
+                            (Some(pin), None)
+                        };
+                        this.apply(window, cx, |e| e.set_constraints(id, h, v));
+                    },
+                ));
+            }
+            section = section.child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(12.0))
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(if vertical { "V" } else { "H" }),
+                    )
+                    .child(group),
+            );
+        }
+        Some(section.into_any_element())
+    }
+
     /// PNG/SVG export of the selected layer.
     fn render_export_section(&self, id: NodeId, cx: &mut Context<Self>) -> AnyElement {
         use super::image_export::ExportTarget;
@@ -2315,7 +2445,8 @@ impl Studio {
             .child(self.render_header(id, cx))
             .children(self.render_component_section(id, cx))
             .child(self.render_align_bar(cx))
-            .child(self.render_frame_section(id, &c, cx));
+            .child(self.render_frame_section(id, &c, cx))
+            .children(self.render_responsive_section(id, cx));
         if !is_text && !is_svg {
             panel = panel.child(self.render_layout_section(&c, cx));
         }

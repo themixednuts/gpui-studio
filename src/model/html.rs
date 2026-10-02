@@ -487,7 +487,8 @@ fn open_tag(doc: &Document, node: &Node, tag: &str, options: ExportOptions) -> S
     for (name, value) in &node.attrs {
         if !options.editor_attrs
             && (super::components::COMPONENT_ATTRS.contains(&name.as_str())
-                || super::prototype::PROTOTYPE_ATTRS.contains(&name.as_str()))
+                || super::prototype::PROTOTYPE_ATTRS.contains(&name.as_str())
+                || name == "data-breakpoint")
         {
             continue;
         }

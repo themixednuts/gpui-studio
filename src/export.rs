@@ -123,7 +123,9 @@ fn html_with_classes(doc: &Document, id: NodeId) -> String {
     let mut used = BTreeSet::new();
     let mut css = String::new();
     let mut html = String::new();
-    write_classed(doc, id, 0, &mut used, &mut css, &mut html);
+    let mut classes = std::collections::HashMap::new();
+    write_classed(doc, id, 0, &mut used, &mut classes, &mut css, &mut html);
+    css.push_str(&media_queries(doc, id, &classes));
     let root = crate::model::variables::root_rule(&used_variables(doc, id))
         .map(|rule| format!("{rule}\n"))
         .unwrap_or_default();
@@ -132,11 +134,92 @@ fn html_with_classes(doc: &Document, id: NodeId) -> String {
     )
 }
 
+/// For an artboard with breakpoints, the CSS that turns its breakpoint
+/// overrides into `@media (max-width: …)` rules, widest first. Text and
+/// structure differences can't be expressed in CSS and are skipped.
+fn media_queries(
+    doc: &Document,
+    main: NodeId,
+    classes: &std::collections::HashMap<NodeId, String>,
+) -> String {
+    use crate::editor::BREAKPOINT_ATTR;
+    use crate::model::components::REF_ATTR;
+    let mut breakpoints: Vec<(NodeId, f32)> = doc
+        .instances_of(main)
+        .into_iter()
+        .filter_map(|id| Some((id, doc.get(id)?.attr(BREAKPOINT_ATTR)?.parse().ok()?)))
+        .collect();
+    if breakpoints.is_empty() {
+        return String::new();
+    }
+    breakpoints.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut css = String::new();
+    // The page fills the viewport instead of the desktop artboard's width.
+    if let Some(class) = classes.get(&main) {
+        let _ = writeln!(css, ".{class} {{ width: auto; max-width: 100%; }}");
+    }
+    for (instance, width) in breakpoints {
+        let mut rules = String::new();
+        for id in std::iter::once(instance).chain(doc.descendants(instance)) {
+            let Some(node) = doc.get(id) else {
+                continue;
+            };
+            let source = if id == instance {
+                Some(main)
+            } else {
+                node.attr(REF_ATTR).and_then(NodeId::parse)
+            };
+            let (Some(source), true) = (source, !node.is_text()) else {
+                continue;
+            };
+            let (Some(class), Some(original)) = (classes.get(&source), doc.get(source)) else {
+                continue;
+            };
+            let mut decls = Vec::new();
+            if node.hidden && !original.hidden {
+                decls.push(("display".to_owned(), "none".to_owned()));
+            }
+            for (property, value) in node.style.iter() {
+                if id == instance && matches!(property, "width" | "height") {
+                    continue;
+                }
+                if original.style.get(property) != Some(value) {
+                    decls.push((property.to_owned(), value.to_owned()));
+                }
+            }
+            for (property, _) in original.style.iter() {
+                if node.style.get(property).is_none()
+                    && !(id == instance && matches!(property, "width" | "height"))
+                {
+                    decls.push((property.to_owned(), "initial".to_owned()));
+                }
+            }
+            if decls.is_empty() {
+                continue;
+            }
+            let _ = writeln!(rules, "  .{class} {{");
+            for (property, value) in decls {
+                let _ = writeln!(rules, "    {property}: {value};");
+            }
+            rules.push_str("  }\n");
+        }
+        if !rules.is_empty() {
+            let _ = writeln!(
+                css,
+                "@media (max-width: {}px) {{\n{rules}}}",
+                crate::model::style::fmt_num(width)
+            );
+        }
+    }
+    css
+}
+
 fn write_classed(
     doc: &Document,
     id: NodeId,
     depth: usize,
     used: &mut BTreeSet<String>,
+    classes: &mut std::collections::HashMap<NodeId, String>,
     css: &mut String,
     out: &mut String,
 ) {
@@ -164,6 +247,7 @@ fn write_classed(
                     class = format!("{base}-{n}");
                     n += 1;
                 }
+                classes.insert(id, class.clone());
                 let _ = writeln!(css, ".{class} {{");
                 for (property, value) in node.style.iter() {
                     let _ = writeln!(css, "  {property}: {value};");
@@ -176,7 +260,11 @@ fn write_classed(
                 let _ = write!(open, " class=\"{}{class}\"", escape_attr(&existing));
             }
             for (name, value) in &node.attrs {
-                if name != "class" {
+                let editor_only = crate::model::components::COMPONENT_ATTRS
+                    .contains(&name.as_str())
+                    || crate::model::prototype::PROTOTYPE_ATTRS.contains(&name.as_str())
+                    || name == crate::editor::BREAKPOINT_ATTR;
+                if name != "class" && !editor_only {
                     let _ = write!(open, " {name}=\"{}\"", escape_attr(value));
                 }
             }
@@ -196,7 +284,7 @@ fn write_classed(
             }
             let _ = writeln!(out, "{indent}{open}");
             for child in &node.children {
-                write_classed(doc, *child, depth + 1, used, css, out);
+                write_classed(doc, *child, depth + 1, used, classes, css, out);
             }
             let _ = writeln!(out, "{indent}</{tag}>");
         }
@@ -549,5 +637,36 @@ mod tests {
         assert!(code.contains("<div class=\"hero-card\">"));
         assert!(!code.contains("style=\""));
         assert!(code.contains(">Hello</h1>"));
+    }
+
+    #[test]
+    fn breakpoint_overrides_become_media_queries() {
+        use crate::editor::{Editor, InsertTarget};
+        let mut doc = Document::new();
+        let board = doc.create_artboard(0, "Landing", (0.0, 0.0), (1280.0, 800.0));
+        let mut editor = Editor::new(doc);
+        let ids = editor
+            .insert_html(
+                "<h1 data-name=\"Title\" style=\"font-size: 64px; color: #111111\">Hi</h1>",
+                InsertTarget {
+                    parent: Some(board),
+                    index: None,
+                },
+            )
+            .unwrap();
+        let mobile = editor.add_breakpoint(board, 390.0).unwrap();
+        let title = editor.doc.children(mobile)[0];
+        editor
+            .set_styles(&[title], &[("font-size".into(), Some("32px".into()))], None)
+            .unwrap();
+        let css = export(&editor.doc, board, CodeFormat::HtmlCss);
+        assert!(css.contains("@media (max-width: 390px) {"), "{css}");
+        assert!(css.contains("    font-size: 32px;"), "{css}");
+        assert!(
+            !css.contains("    color:"),
+            "unchanged properties are not repeated: {css}"
+        );
+        assert!(!css.contains("data-component") && !css.contains("data-breakpoint"));
+        let _ = ids;
     }
 }

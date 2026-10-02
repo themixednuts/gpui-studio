@@ -539,6 +539,37 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: false,
     },
     CommandSpec {
+        name: "add_breakpoint",
+        title: "Add breakpoint",
+        description: "Add a responsive breakpoint to an artboard: a synced copy at the given width (e.g. 768 tablet, 390 mobile). Edits to the main artboard flow into it; styles changed only on the breakpoint become @media (max-width) rules in HTML+CSS export.",
+        schema: || {
+            object(
+                json!({
+                    "artboard_id": { "type": "string", "description": NODE },
+                    "width": { "type": "number", "minimum": 120, "maximum": 4096 }
+                }),
+                &["artboard_id", "width"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "set_constraints",
+        title: "Set constraints",
+        description: "Pin an absolutely positioned layer within its parent, keeping its current place: horizontal left|right|both|center, vertical top|bottom|both|center (both stretches with the parent).",
+        schema: || {
+            object(
+                json!({
+                    "node_id": { "type": "string", "description": NODE },
+                    "horizontal": { "type": "string", "enum": ["left", "right", "both", "center"] },
+                    "vertical": { "type": "string", "enum": ["top", "bottom", "both", "center"] }
+                }),
+                &["node_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
         name: "list_versions",
         title: "List versions",
         description: "The project's version history, newest first: named versions and automatic checkpoints (including one before each batch of agent edits).",
@@ -1228,6 +1259,36 @@ fn execute_command(editor: &mut Editor, name: &str, arguments: Value) -> Result<
         "export_image" => Err(AgentError::Invalid(
             "export_image needs the Studio window to lay the layer out".into(),
         )),
+        "add_breakpoint" => {
+            #[derive(Deserialize)]
+            struct A {
+                artboard_id: String,
+                width: f32,
+            }
+            let a: A = args(arguments)?;
+            let board = node(editor, &a.artboard_id)?;
+            let id = editor.add_breakpoint(board, a.width)?;
+            Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
+        }
+        "set_constraints" => {
+            #[derive(Deserialize)]
+            struct A {
+                node_id: String,
+                horizontal: Option<String>,
+                vertical: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            let id = node(editor, &a.node_id)?;
+            let parse = |v: Option<String>| -> Result<Option<crate::editor::Pin>, AgentError> {
+                v.map(|v| {
+                    crate::editor::Pin::parse(&v)
+                        .ok_or_else(|| AgentError::Invalid(format!("unknown constraint {v:?}")))
+                })
+                .transpose()
+            };
+            editor.set_constraints(id, parse(a.horizontal)?, parse(a.vertical)?)?;
+            Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
+        }
         "list_versions" => Ok(Value::Array(
             editor
                 .versions

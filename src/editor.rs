@@ -90,6 +90,36 @@ pub struct InsertTarget {
     pub index: Option<usize>,
 }
 
+/// Marks a breakpoint artboard; the value is its width in px.
+pub const BREAKPOINT_ATTR: &str = "data-breakpoint";
+
+/// How an absolutely positioned layer is pinned on one axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pin {
+    /// Fixed distance from the left (or top) edge.
+    Start,
+    /// Fixed distance from the right (or bottom) edge.
+    End,
+    /// Both edges: the layer stretches with its parent.
+    Both,
+    /// Centered in the parent.
+    Center,
+}
+
+impl Pin {
+    /// Parse `start|left|top`, `end|right|bottom`, `both|stretch`, `center`.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "start" | "left" | "top" => Self::Start,
+            "end" | "right" | "bottom" => Self::End,
+            "both" | "stretch" | "left-right" | "top-bottom" => Self::Both,
+            "center" => Self::Center,
+            _ => return None,
+        })
+    }
+}
+
 /// Where an imported image goes.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ImagePlacement {
@@ -1460,6 +1490,204 @@ impl Editor {
         Ok(())
     }
 
+    /// Add a responsive breakpoint for an artboard: a synced copy (instance)
+    /// at `width`, placed to the right of the artboard's other breakpoints.
+    /// Desktop edits flow into it; edits made only at the breakpoint are its
+    /// overrides (exported as media queries).
+    pub fn add_breakpoint(&mut self, artboard: NodeId, width: f32) -> Result<NodeId> {
+        use crate::model::components::INSTANCE_ATTR;
+        if !self.doc.is_artboard(artboard) {
+            bail!("breakpoints are added to artboards");
+        }
+        if self
+            .doc
+            .get(artboard)
+            .and_then(|n| n.attr(INSTANCE_ATTR))
+            .is_some()
+        {
+            bail!("add breakpoints to the main artboard, not to a breakpoint");
+        }
+        if !(120.0..=4096.0).contains(&width) {
+            bail!("breakpoint width must be between 120 and 4096 px");
+        }
+        let width = width.round();
+        if self.doc.component_name(artboard).is_none() {
+            let name = self.doc.display_name(artboard);
+            self.create_component(artboard, Some(&name))?;
+        }
+        // Place it in the main artboard's row, right of every artboard on the page.
+        let main_y = self.doc.artboard_of(artboard).map_or(0.0, |a| a.y);
+        let page_boards: Vec<NodeId> = self
+            .doc
+            .pages
+            .get(self.page)
+            .map(|p| p.artboards.iter().map(|a| a.root).collect())
+            .unwrap_or_default();
+        let right_edge = page_boards
+            .iter()
+            .filter_map(|id| {
+                let a = self.doc.artboard_of(*id)?;
+                let w = self
+                    .measured
+                    .get(id)
+                    .map(|r| r.w)
+                    .or_else(|| {
+                        self.doc
+                            .get(*id)
+                            .and_then(|n| n.style.computed().width.px())
+                    })
+                    .unwrap_or(800.0);
+                Some(a.x + w)
+            })
+            .fold(0.0_f32, f32::max);
+        let right = (right_edge, main_y);
+        let base_name = self.doc.display_name(artboard);
+        let page = self.page;
+        let id = self.edit(None, |doc| {
+            let id = doc.instantiate(artboard)?;
+            let node = doc.get_mut(id).context("instance missing")?;
+            node.style.set("width", &format!("{}px", fmt_num(width)));
+            node.set_attr(BREAKPOINT_ATTR, &fmt_num(width));
+            node.name = Some(format!("{base_name} · {}", fmt_num(width)));
+            doc.add_artboard(page, id, (right.0 + 80.0).round(), right.1);
+            Ok(id)
+        })?;
+        self.select([id]);
+        Ok(id)
+    }
+
+    /// Breakpoint artboards of a main artboard, widest first.
+    #[must_use]
+    pub fn breakpoints(&self, artboard: NodeId) -> Vec<(NodeId, f32)> {
+        let mut out: Vec<(NodeId, f32)> = self
+            .doc
+            .instances_of(artboard)
+            .into_iter()
+            .filter_map(|id| {
+                let width = self.doc.get(id)?.attr(BREAKPOINT_ATTR)?.parse().ok()?;
+                Some((id, width))
+            })
+            .collect();
+        out.sort_by(|a, b| b.1.total_cmp(&a.1));
+        out
+    }
+
+    /// Pin an absolutely positioned layer horizontally and/or vertically,
+    /// keeping where it is now (needs its measured layout).
+    pub fn set_constraints(
+        &mut self,
+        id: NodeId,
+        horizontal: Option<Pin>,
+        vertical: Option<Pin>,
+    ) -> Result<()> {
+        let node = self.doc.get(id).context("layer does not exist")?;
+        if node.style.computed().position != Position::Absolute {
+            bail!("constraints apply to absolutely positioned layers");
+        }
+        let parent = self.doc.parent(id).context("layer has no parent")?;
+        let r = *self
+            .measured
+            .get(&id)
+            .context("the layer has not been laid out yet")?;
+        let p = *self
+            .measured
+            .get(&parent)
+            .context("the parent has not been laid out yet")?;
+        let mut changes: Vec<(String, Option<String>)> = Vec::new();
+        let px_value = |v: f32| Some(format!("{}px", fmt_num(v.round())));
+        let mut axis = |pin: Pin,
+                        start: &str,
+                        end: &str,
+                        size: &str,
+                        margin: [&str; 2],
+                        offset: f32,
+                        length: f32,
+                        total: f32| {
+            let before = offset;
+            let after = total - offset - length;
+            for m in margin {
+                changes.push((m.to_owned(), None));
+            }
+            match pin {
+                Pin::Start => {
+                    changes.push((start.to_owned(), px_value(before)));
+                    changes.push((end.to_owned(), None));
+                    changes.push((size.to_owned(), px_value(length)));
+                }
+                Pin::End => {
+                    changes.push((start.to_owned(), None));
+                    changes.push((end.to_owned(), px_value(after)));
+                    changes.push((size.to_owned(), px_value(length)));
+                }
+                Pin::Both => {
+                    changes.push((start.to_owned(), px_value(before)));
+                    changes.push((end.to_owned(), px_value(after)));
+                    changes.push((size.to_owned(), None));
+                }
+                Pin::Center => {
+                    changes.push((start.to_owned(), Some("0px".to_owned())));
+                    changes.push((end.to_owned(), Some("0px".to_owned())));
+                    changes.push((size.to_owned(), px_value(length)));
+                    for m in margin {
+                        changes.push((m.to_owned(), Some("auto".to_owned())));
+                    }
+                }
+            }
+        };
+        if let Some(pin) = horizontal {
+            axis(
+                pin,
+                "left",
+                "right",
+                "width",
+                ["margin-left", "margin-right"],
+                r.x - p.x,
+                r.w,
+                p.w,
+            );
+        }
+        if let Some(pin) = vertical {
+            axis(
+                pin,
+                "top",
+                "bottom",
+                "height",
+                ["margin-top", "margin-bottom"],
+                r.y - p.y,
+                r.h,
+                p.h,
+            );
+        }
+        self.set_styles(&[id], &changes, None)
+    }
+
+    /// Current pins of an absolutely positioned layer (horizontal, vertical).
+    #[must_use]
+    pub fn constraints(&self, id: NodeId) -> Option<(Pin, Pin)> {
+        let node = self.doc.get(id)?;
+        let c = node.style.computed();
+        if c.position != Position::Absolute {
+            return None;
+        }
+        let auto = |m: &crate::model::Length| *m == crate::model::Length::Auto;
+        let pin = |start: &crate::model::Length, end: &crate::model::Length, centered: bool| {
+            let (s, e) = (start.px().is_some(), end.px().is_some());
+            match (s, e) {
+                (true, true) if centered => Pin::Center,
+                (true, true) => Pin::Both,
+                (false, true) => Pin::End,
+                _ => Pin::Start,
+            }
+        };
+        let has = |p: &str| node.style.get(p).is_some();
+        let h_center = has("margin-left") && auto(&c.margin[3]) && auto(&c.margin[1]);
+        let v_center = has("margin-top") && auto(&c.margin[0]) && auto(&c.margin[2]);
+        Some((
+            pin(&c.inset[3], &c.inset[1], h_center),
+            pin(&c.inset[0], &c.inset[2], v_center),
+        ))
+    }
+
     /// Create or update a design variable. Returns its normalized name.
     pub fn set_variable(&mut self, name: &str, value: &str) -> Result<String> {
         let name = crate::model::variables::normalize_name(name)
@@ -1680,6 +1908,65 @@ mod tests {
             !html.contains("data-component"),
             "code export strips component markers"
         );
+    }
+
+    #[test]
+    fn breakpoints_are_synced_artboards_and_constraints_pin_layers() {
+        let (mut editor, board) = editor();
+        let bp = editor.add_breakpoint(board, 390.0).unwrap();
+        assert!(editor.doc.is_artboard(bp));
+        assert_eq!(
+            editor.doc.get(bp).unwrap().style.get("width"),
+            Some("390px")
+        );
+        assert_eq!(editor.breakpoints(board), vec![(bp, 390.0)]);
+        assert!(
+            editor.add_breakpoint(bp, 200.0).is_err(),
+            "not on a breakpoint"
+        );
+        // Desktop edits flow into the breakpoint; its own width is an override.
+        editor
+            .set_styles(
+                &[board],
+                &[("background-color".into(), Some("#eeeeee".into()))],
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            editor.doc.get(bp).unwrap().style.get("background-color"),
+            Some("#eeeeee")
+        );
+        assert_eq!(
+            editor.doc.get(bp).unwrap().style.get("width"),
+            Some("390px")
+        );
+
+        let ids = editor
+            .insert_html(
+                "<div style=\"position: absolute; left: 100px; top: 50px; width: 200px; height: 40px\"></div>",
+                InsertTarget { parent: Some(board), index: None },
+            )
+            .unwrap();
+        let badge = ids[0];
+        editor
+            .measured
+            .insert(board, Rect::new(0.0, 0.0, 800.0, 600.0));
+        editor
+            .measured
+            .insert(badge, Rect::new(100.0, 50.0, 200.0, 40.0));
+        editor
+            .set_constraints(badge, Some(Pin::End), Some(Pin::Both))
+            .unwrap();
+        let style = &editor.doc.get(badge).unwrap().style;
+        assert_eq!(style.get("right"), Some("500px"));
+        assert_eq!(style.get("left"), None);
+        assert_eq!(style.get("bottom"), Some("510px"));
+        assert_eq!(style.get("height"), None);
+        assert_eq!(editor.constraints(badge), Some((Pin::End, Pin::Both)));
+        editor
+            .set_constraints(badge, Some(Pin::Center), None)
+            .unwrap();
+        assert_eq!(editor.constraints(badge).unwrap().0, Pin::Center);
     }
 
     #[test]
