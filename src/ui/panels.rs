@@ -44,6 +44,14 @@ impl Render for DraggedLayer {
     }
 }
 
+/// Purple used for components and instances, as in other design tools.
+pub(crate) const COMPONENT_COLOR: gpui_kit::Hsla = gpui_kit::Hsla {
+    h: 0.736,
+    s: 1.0,
+    l: 0.65,
+    a: 1.0,
+};
+
 struct LayerRow {
     id: NodeId,
     depth: usize,
@@ -94,6 +102,12 @@ impl Studio {
         let Some(node) = doc.get(id) else {
             return Lucide::Square;
         };
+        if doc.component_name(id).is_some() {
+            return Lucide::Component;
+        }
+        if node.attr(crate::model::components::INSTANCE_ATTR).is_some() {
+            return Lucide::Diamond;
+        }
         if doc.is_artboard(id) {
             return Lucide::Frame;
         }
@@ -311,6 +325,8 @@ impl Studio {
                 .map(|(_, input)| input.clone());
             let group: SharedString = format!("layer-{id}").into();
             let renaming_none = renaming.is_none();
+            let componentish = self.editor.doc.component_name(id).is_some()
+                || node.is_some_and(|n| n.attr(crate::model::components::INSTANCE_ATTR).is_some());
             let drop_here = self
                 .layer_drop
                 .filter(|(target, _)| *target == id)
@@ -367,7 +383,9 @@ impl Studio {
                     .child(
                         Icon::new(self.layer_icon(id))
                             .xsmall()
-                            .text_color(if is_artboard {
+                            .text_color(if componentish {
+                                COMPONENT_COLOR
+                            } else if is_artboard {
                                 theme.primary
                             } else {
                                 theme.muted_foreground
@@ -382,6 +400,7 @@ impl Studio {
                             .flex_1()
                             .min_w_0()
                             .truncate()
+                            .when(componentish, |this| this.text_color(COMPONENT_COLOR))
                             .when(is_artboard, |this| this.font_weight(FontWeight::MEDIUM))
                             .child(self.editor.doc.display_name(id))
                             .into_any_element(),
@@ -560,9 +579,74 @@ impl Studio {
                     })),
             );
         }
+        let mains = self.editor.doc.components();
+        let mut project = v_flex().gap_0p5();
+        for main in &mains {
+            let main = *main;
+            let name = self
+                .editor
+                .doc
+                .component_name(main)
+                .unwrap_or("Component")
+                .to_owned();
+            let count = self.editor.doc.instances_of(main).len();
+            project =
+                project.child(
+                    h_flex()
+                        .id(SharedString::from(format!("project-component-{main}")))
+                        .h(px(28.0))
+                        .px_2()
+                        .gap_2()
+                        .rounded(px(6.0))
+                        .hover(|this| this.bg(theme.secondary))
+                        .cursor_pointer()
+                        .child(
+                            Icon::new(Lucide::Component)
+                                .xsmall()
+                                .text_color(COMPONENT_COLOR),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child(name))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(
+                            match count {
+                                0 => String::new(),
+                                1 => "1 instance".to_owned(),
+                                n => format!("{n} instances"),
+                            },
+                        ))
+                        .tooltip(|window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new("Insert an instance")
+                                .build(window, cx)
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let target = this.editor.insertion_target();
+                            let target = if target
+                                .parent
+                                .is_some_and(|p| this.editor.doc.is_ancestor_or_self(main, p))
+                            {
+                                crate::editor::InsertTarget::default()
+                            } else {
+                                target
+                            };
+                            if let Some(id) =
+                                this.apply(window, cx, |e| e.create_instance(main, target))
+                            {
+                                this.reveal(id, cx);
+                            }
+                        })),
+                );
+        }
         v_flex()
             .p_3()
             .gap_3()
+            .when(!mains.is_empty(), |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("This project"),
+                )
+                .child(project)
+            })
             .child(
                 div()
                     .text_xs()
@@ -575,7 +659,7 @@ impl Studio {
                     div()
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("Components"),
+                        .child("Library"),
                 ),
             )
             .child(components)

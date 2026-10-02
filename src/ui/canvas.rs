@@ -18,13 +18,13 @@ use gpui_kit::{
 use super::paint::{LayoutMap, Painter};
 use super::{
     AlignBottom, AlignHCenter, AlignLeft, AlignRight, AlignTop, AlignVCenter, ArrowTool,
-    BringForward, CANVAS_CONTEXT, CommentTool, ConnectorTool, CopySelection, CutSelection,
-    DeleteSelection, DistributeHorizontal, DistributeVertical, DuplicateSelection, EllipseTool,
-    EnterSelection, EscapeSelection, FrameTool, GroupSelection, HandTool, LineTool, NudgeDown,
-    NudgeDownBig, NudgeLeft, NudgeLeftBig, NudgeRight, NudgeRightBig, NudgeUp, NudgeUpBig,
-    PasteClipboard, PencilTool, PlaceImage, RectangleTool, RenameSelection, RightTab,
-    SelectAllSiblings, SelectTool, SendBackward, Studio, TextTool, ToggleAutoLayout, ToggleHidden,
-    ToggleLocked, UngroupSelection, ZoomToSelection,
+    BringForward, CANVAS_CONTEXT, CommentTool, ConnectorTool, CopySelection, CreateComponent,
+    CutSelection, DeleteSelection, DetachInstance, DistributeHorizontal, DistributeVertical,
+    DuplicateSelection, EllipseTool, EnterSelection, EscapeSelection, FrameTool, GroupSelection,
+    HandTool, LineTool, NudgeDown, NudgeDownBig, NudgeLeft, NudgeLeftBig, NudgeRight,
+    NudgeRightBig, NudgeUp, NudgeUpBig, PasteClipboard, PencilTool, PlaceImage, RectangleTool,
+    RenameSelection, RightTab, SelectAllSiblings, SelectTool, SendBackward, Studio, TextTool,
+    ToggleAutoLayout, ToggleHidden, ToggleLocked, UngroupSelection, ZoomToSelection,
 };
 use crate::editor::{ImagePlacement, InsertTarget, Tool};
 use crate::geometry::{Align, Axis, Edges, Guide, Rect, guides, snap};
@@ -2324,6 +2324,17 @@ impl Studio {
         }) * zoom);
         let ink: Hsla = gpui_kit::rgb(0x17181c).into();
         let guide_color: Hsla = gpui_kit::rgb(0xf24822).into();
+        let componentish: BTreeSet<NodeId> = self
+            .editor
+            .selection
+            .iter()
+            .chain(self.canvas.hover.iter())
+            .copied()
+            .filter(|id| {
+                let doc = &self.editor.doc;
+                doc.component_name(*id).is_some() || doc.instance_root(*id).is_some()
+            })
+            .collect();
         let guide_lines: Vec<Bounds<Pixels>> = self
             .canvas
             .guides
@@ -2409,17 +2420,26 @@ impl Studio {
                     paint_polyline(window, &[*start, *current], px(2.0), accent, true);
                     paint_arrowhead(window, *current, *start, accent);
                 }
+                let tint = |id: &NodeId| {
+                    if componentish.contains(id) {
+                        super::panels::COMPONENT_COLOR
+                    } else {
+                        accent
+                    }
+                };
                 if let Some(hover) = hover.or(draw_tool_parent)
                     && let Some(b) = layout.get(&hover)
                 {
-                    window.paint_quad(outline_quad(*b, 1.0, accent));
+                    window.paint_quad(outline_quad(*b, 1.0, tint(&hover)));
                 }
                 let selected: Vec<Bounds<Pixels>> = selection
                     .iter()
                     .filter_map(|id| layout.get(id).copied())
                     .collect();
-                for b in &selected {
-                    window.paint_quad(outline_quad(*b, 1.5, accent));
+                for id in &selection {
+                    if let Some(b) = layout.get(id) {
+                        window.paint_quad(outline_quad(*b, 1.5, tint(id)));
+                    }
                 }
                 if selected.len() > 1
                     && let Some(union) = window_union(selected.iter().copied())
@@ -2677,6 +2697,18 @@ impl Studio {
                 }
             }))
             .on_action(cx.listener(|this, _: &PlaceImage, w, cx| this.prompt_place_image(w, cx)))
+            .on_action(cx.listener(|this, _: &CreateComponent, window, cx| {
+                if let Some(id) = this.editor.primary() {
+                    this.apply(window, cx, |e| e.create_component(id, None));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &DetachInstance, window, cx| {
+                for id in this.editor.selection.clone() {
+                    if let Some(root) = this.editor.doc.instance_root(id) {
+                        this.apply(window, cx, |e| e.detach_instance(root));
+                    }
+                }
+            }))
             .on_action(cx.listener(|this, _: &AlignLeft, w, cx| this.align(Align::Left, w, cx)))
             .on_action(
                 cx.listener(|this, _: &AlignHCenter, w, cx| this.align(Align::HCenter, w, cx)),

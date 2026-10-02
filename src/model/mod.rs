@@ -7,6 +7,7 @@
 //! written back to disk as standalone HTML files, and exposed to MCP agents.
 
 pub mod color;
+pub mod components;
 pub mod connection;
 pub mod css;
 pub mod grid;

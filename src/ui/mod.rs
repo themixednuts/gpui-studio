@@ -83,7 +83,9 @@ mod actions {
             AlignBottom,
             DistributeHorizontal,
             DistributeVertical,
-            PlaceImage
+            PlaceImage,
+            CreateComponent,
+            DetachInstance
         ]
     );
 }
@@ -158,6 +160,8 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-l", ToggleLocked, c),
         KeyBinding::new("secondary-r", RenameSelection, c),
         KeyBinding::new("secondary-shift-k", PlaceImage, c),
+        KeyBinding::new("secondary-alt-k", CreateComponent, c),
+        KeyBinding::new("secondary-alt-b", DetachInstance, c),
         KeyBinding::new("alt-a", AlignLeft, c),
         KeyBinding::new("alt-h", AlignHCenter, c),
         KeyBinding::new("alt-d", AlignRight, c),

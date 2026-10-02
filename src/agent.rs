@@ -383,6 +383,65 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: true,
     },
     CommandSpec {
+        name: "list_project_components",
+        title: "List project components",
+        description: "Main components defined in this project (layers marked data-component) with their instances. Editing a main updates every instance except properties an instance overrides.",
+        schema: || object(json!({}), &[]),
+        mutating: false,
+    },
+    CommandSpec {
+        name: "create_component",
+        title: "Create component",
+        description: "Make a layer a main component so instances of it stay in sync.",
+        schema: || {
+            object(
+                json!({ "node_id": { "type": "string", "description": NODE }, "name": { "type": "string" } }),
+                &["node_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "create_instance",
+        title: "Create instance",
+        description: "Insert an instance of a main component into parent_id (at index), or next to the main when parent_id is omitted.",
+        schema: || {
+            object(
+                json!({
+                    "component_id": { "type": "string", "description": "Id of the main component." },
+                    "parent_id": { "type": "string", "description": NODE },
+                    "index": { "type": "integer", "minimum": 0 }
+                }),
+                &["component_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "detach_instance",
+        title: "Detach instance",
+        description: "Turn an instance into ordinary layers that no longer sync.",
+        schema: || {
+            object(
+                json!({ "node_id": { "type": "string", "description": NODE } }),
+                &["node_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "reset_overrides",
+        title: "Reset overrides",
+        description: "Make an instance match its main component again (keeps its own position).",
+        schema: || {
+            object(
+                json!({ "node_id": { "type": "string", "description": NODE } }),
+                &["node_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
         name: "list_variables",
         title: "List variables",
         description: "Design variables (CSS custom properties on :root) with their values, resolved values, kind (color, number, other), and how many layers use each. Use them in styles as var(--name).",
@@ -751,6 +810,67 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
             Ok(
                 json!({ "id": id.to_string(), "html": editor.html_of(id, true), "bounds": bounds_json(editor, id) }),
             )
+        }
+        "list_project_components" => {
+            let doc = &editor.doc;
+            Ok(Value::Array(
+                doc.components()
+                    .into_iter()
+                    .map(|main| {
+                        json!({
+                            "id": main.to_string(),
+                            "name": doc.component_name(main),
+                            "artboard": doc.artboard_of(main).map(|a| a.root.to_string()),
+                            "instances": doc.instances_of(main).iter().map(|i| json!({
+                                "id": i.to_string(),
+                                "overridden": doc.has_overrides(*i),
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect(),
+            ))
+        }
+        "create_component" => {
+            #[derive(Deserialize)]
+            struct A {
+                node_id: String,
+                name: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            let id = node(editor, &a.node_id)?;
+            let name = editor.create_component(id, a.name.as_deref())?;
+            Ok(json!({ "id": id.to_string(), "name": name, "revision": editor.revision }))
+        }
+        "create_instance" => {
+            #[derive(Deserialize)]
+            struct A {
+                component_id: String,
+                parent_id: Option<String>,
+                index: Option<usize>,
+            }
+            let a: A = args(arguments)?;
+            let main = node(editor, &a.component_id)?;
+            let parent = a.parent_id.map(|id| node(editor, &id)).transpose()?;
+            let id = editor.create_instance(
+                main,
+                InsertTarget {
+                    parent,
+                    index: a.index,
+                },
+            )?;
+            Ok(
+                json!({ "id": id.to_string(), "html": editor.html_of(id, true), "revision": editor.revision }),
+            )
+        }
+        "detach_instance" | "reset_overrides" => {
+            let a: NodeArg = args(arguments)?;
+            let id = node(editor, &a.node_id)?;
+            if name == "detach_instance" {
+                editor.detach_instance(id)?;
+            } else {
+                editor.reset_overrides(id)?;
+            }
+            Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
         }
         "list_variables" => Ok(variables_json(editor)),
         "set_variable" => {
@@ -1659,5 +1779,66 @@ mod tests {
                 .contains("primary")
         );
         assert!(execute(&mut editor, "delete_variable", json!({ "name": "nope" })).is_err());
+    }
+
+    #[test]
+    fn agent_builds_and_syncs_components() {
+        let mut editor = demo_editor();
+        let board = editor.doc.pages[0].artboards[0].root;
+        let made = execute(
+            &mut editor,
+            "write_html",
+            json!({ "html": "<div data-name=\"Tag\" style=\"display: flex; padding: 4px; background-color: #eee\"><span>New</span></div>", "parent_id": board.to_string() }),
+        )
+        .unwrap();
+        let tag = made["ids"][0].as_str().unwrap().to_owned();
+        execute(&mut editor, "create_component", json!({ "node_id": tag })).unwrap();
+        let instance = execute(
+            &mut editor,
+            "create_instance",
+            json!({ "component_id": tag }),
+        )
+        .unwrap();
+        let instance = instance["id"].as_str().unwrap().to_owned();
+        execute(
+            &mut editor,
+            "update_styles",
+            json!({ "node_ids": [tag], "styles": { "background-color": "#0d99ff" } }),
+        )
+        .unwrap();
+        let list = execute(&mut editor, "list_project_components", json!({})).unwrap();
+        assert_eq!(list[0]["name"], "Tag");
+        assert_eq!(list[0]["instances"][0]["id"], instance.as_str());
+        assert_eq!(list[0]["instances"][0]["overridden"], false);
+        let html = execute(&mut editor, "get_node", json!({ "node_id": instance })).unwrap();
+        assert!(html["html"].as_str().unwrap().contains("#0d99ff"));
+        execute(
+            &mut editor,
+            "update_styles",
+            json!({ "node_ids": [instance], "styles": { "padding": "9px" } }),
+        )
+        .unwrap();
+        let list = execute(&mut editor, "list_project_components", json!({})).unwrap();
+        assert_eq!(list[0]["instances"][0]["overridden"], true);
+        execute(
+            &mut editor,
+            "reset_overrides",
+            json!({ "node_id": instance }),
+        )
+        .unwrap();
+        execute(
+            &mut editor,
+            "detach_instance",
+            json!({ "node_id": instance }),
+        )
+        .unwrap();
+        assert!(
+            execute(
+                &mut editor,
+                "detach_instance",
+                json!({ "node_id": instance })
+            )
+            .is_err()
+        );
     }
 }

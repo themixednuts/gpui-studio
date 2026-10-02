@@ -218,6 +218,9 @@ impl Editor {
         match apply(&mut self.doc) {
             Ok(result) => {
                 if self.doc != before {
+                    // Edits to main components flow into their instances as
+                    // part of the same undoable step.
+                    self.doc.sync_components(&before);
                     self.history.record(&before, key);
                     self.revision += 1;
                     self.dirty = true;
@@ -297,8 +300,10 @@ impl Editor {
             // external write after that is merged.
             return false;
         }
+        let before = self.doc.clone();
         match project.sync_external(&mut self.doc) {
             Ok(changed) if !changed.is_empty() => {
+                self.doc.sync_components(&before);
                 self.revision += 1;
                 self.history.seal();
                 self.selection.retain(|id| self.doc.contains(*id));
@@ -362,6 +367,14 @@ impl Editor {
                 .get_mut(id)
                 .ok_or_else(|| anyhow!("node {id} does not exist"))?;
             node.name = (!name.trim().is_empty()).then(|| name.trim().to_owned());
+            // A main component's name is its layer name.
+            if let Some(name) = node.name.clone()
+                && node
+                    .attr(crate::model::components::COMPONENT_ATTR)
+                    .is_some()
+            {
+                node.set_attr(crate::model::components::COMPONENT_ATTR, &name);
+            }
             Ok(())
         })
     }
@@ -1219,6 +1232,109 @@ impl Editor {
         self.move_by(&moves, None)
     }
 
+    /// Make a layer a main component. Returns its name.
+    pub fn create_component(&mut self, id: NodeId, name: Option<&str>) -> Result<String> {
+        use crate::model::components::{COMPONENT_ATTR, INSTANCE_ATTR};
+        let node = self.doc.get(id).context("layer does not exist")?;
+        if node.is_text() {
+            bail!("text runs can't be components; use their parent");
+        }
+        if self.doc.instance_root(id).is_some() {
+            bail!("layers inside an instance can't become components; detach it first");
+        }
+        if node.attr(INSTANCE_ATTR).is_some() {
+            bail!("detach the instance before making it a component");
+        }
+        let name = name
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map_or_else(|| self.doc.display_name(id), ToOwned::to_owned);
+        let label = name.clone();
+        self.edit(None, |doc| {
+            let node = doc.get_mut(id).context("layer does not exist")?;
+            node.set_attr(COMPONENT_ATTR, &label);
+            if node.name.is_none() {
+                node.name = Some(label.clone());
+            }
+            Ok(())
+        })?;
+        Ok(name)
+    }
+
+    /// Insert an instance of a main component. Without a parent it goes next
+    /// to the main (or becomes a new artboard when the main is an artboard).
+    pub fn create_instance(&mut self, main: NodeId, target: InsertTarget) -> Result<NodeId> {
+        if self.doc.component_name(main).is_none() {
+            bail!("{main} is not a component");
+        }
+        if let Some(parent) = target.parent
+            && self.doc.is_ancestor_or_self(main, parent)
+        {
+            bail!("a component can't contain an instance of itself");
+        }
+        let page = self.page;
+        let next = self.next_artboard_position();
+        let main_artboard = self.doc.is_artboard(main);
+        let (parent, index) = match target.parent {
+            Some(parent) => (Some(parent), target.index),
+            None if main_artboard => (None, None),
+            None => {
+                let parent = self.doc.parent(main).context("component has no parent")?;
+                let index = self.doc.children(parent).iter().position(|c| *c == main);
+                (Some(parent), index.map(|i| i + 1))
+            }
+        };
+        let id = self.edit(None, |doc| {
+            let id = doc.instantiate(main)?;
+            match parent {
+                Some(parent) => doc.attach(id, parent, index)?,
+                None => {
+                    doc.add_artboard(page, id, next.0, next.1);
+                }
+            }
+            Ok(id)
+        })?;
+        self.select([id]);
+        Ok(id)
+    }
+
+    /// Turn an instance into ordinary layers.
+    pub fn detach_instance(&mut self, id: NodeId) -> Result<()> {
+        if self
+            .doc
+            .get(id)
+            .and_then(|n| n.attr(crate::model::components::INSTANCE_ATTR))
+            .is_none()
+        {
+            bail!("{id} is not an instance");
+        }
+        self.edit(None, |doc| {
+            doc.detach_instance(id);
+            Ok(())
+        })
+    }
+
+    /// Make an instance match its main again.
+    pub fn reset_overrides(&mut self, id: NodeId) -> Result<()> {
+        self.edit(None, |doc| Ok(doc.reset_overrides(id)?))
+    }
+
+    /// Stop a layer being a main component (its instances become detached).
+    pub fn remove_component(&mut self, id: NodeId) -> Result<()> {
+        if self.doc.component_name(id).is_none() {
+            bail!("{id} is not a component");
+        }
+        self.edit(None, |doc| {
+            for instance in doc.instances_of(id) {
+                doc.detach_instance(instance);
+            }
+            if let Some(node) = doc.get_mut(id) {
+                node.set_attr(crate::model::components::COMPONENT_ATTR, "");
+            }
+            Ok(())
+        })
+    }
+
     /// Create or update a design variable. Returns its normalized name.
     pub fn set_variable(&mut self, name: &str, value: &str) -> Result<String> {
         let name = crate::model::variables::normalize_name(name)
@@ -1376,6 +1492,68 @@ mod tests {
             Editor::new(Document::new())
                 .import_image(&png, "a.png", ImagePlacement::default())
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn component_edits_sync_to_instances_in_one_undo_step() {
+        let (mut editor, board) = editor();
+        let ids = editor
+            .insert_html(
+                "<div style=\"display: flex; padding: 8px\"><p>Hi</p></div>",
+                InsertTarget {
+                    parent: Some(board),
+                    index: None,
+                },
+            )
+            .unwrap();
+        let main = ids[0];
+        assert_eq!(editor.create_component(main, Some("Chip")).unwrap(), "Chip");
+        editor.rename(main, "Pill").unwrap();
+        assert_eq!(editor.doc.component_name(main), Some("Pill"));
+        let instance = editor
+            .create_instance(main, InsertTarget::default())
+            .unwrap();
+        assert_eq!(editor.doc.parent(instance), Some(board));
+        assert_eq!(
+            editor.doc.children(board)[1],
+            instance,
+            "placed after the main"
+        );
+        editor
+            .set_styles(&[main], &[("padding".into(), Some("20px".into()))], None)
+            .unwrap();
+        assert_eq!(
+            editor.doc.get(instance).unwrap().style.get("padding"),
+            Some("20px")
+        );
+        assert!(editor.undo());
+        assert_eq!(
+            editor.doc.get(instance).unwrap().style.get("padding"),
+            Some("8px")
+        );
+        assert!(
+            editor
+                .create_component(editor.doc.children(instance)[0], None)
+                .is_err()
+        );
+        assert!(
+            editor
+                .create_instance(
+                    main,
+                    InsertTarget {
+                        parent: Some(main),
+                        index: None
+                    }
+                )
+                .is_err()
+        );
+        editor.detach_instance(instance).unwrap();
+        assert!(editor.doc.instances_of(main).is_empty());
+        let html = editor.html_of(main, false);
+        assert!(
+            !html.contains("data-component"),
+            "code export strips component markers"
         );
     }
 

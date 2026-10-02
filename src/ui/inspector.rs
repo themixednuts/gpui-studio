@@ -964,6 +964,158 @@ impl Studio {
             .into_any_element()
     }
 
+    /// Component or instance controls for the primary layer.
+    fn render_component_section(&self, id: NodeId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use super::panels::COMPONENT_COLOR;
+        use crate::model::components::INSTANCE_ATTR;
+        let theme = cx.theme().clone();
+        let doc = &self.editor.doc;
+        let row = |icon: Lucide, title: String, detail: String| {
+            h_flex()
+                .gap_2()
+                .child(Icon::new(icon).xsmall().text_color(COMPONENT_COLOR))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(COMPONENT_COLOR)
+                                .child(title),
+                        )
+                        .when(!detail.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(detail),
+                            )
+                        }),
+                )
+        };
+        let button = |key: &str, icon: Lucide, tooltip: &'static str| {
+            Button::new(SharedString::from(format!("{key}-{id}")))
+                .icon(Icon::new(icon))
+                .ghost()
+                .xsmall()
+                .tooltip(tooltip)
+        };
+        let content = if let Some(name) = doc.component_name(id) {
+            let count = doc.instances_of(id).len();
+            row(
+                Lucide::Component,
+                name.to_owned(),
+                match count {
+                    0 => "Main component".to_owned(),
+                    1 => "Main component · 1 instance".to_owned(),
+                    n => format!("Main component · {n} instances"),
+                },
+            )
+            .child(
+                button("component-instance", Lucide::Plus, "Create instance").on_click(
+                    cx.listener(move |this, _, window, cx| {
+                        if let Some(instance) = this.apply(window, cx, |e| {
+                            e.create_instance(id, crate::editor::InsertTarget::default())
+                        }) {
+                            this.reveal(instance, cx);
+                        }
+                    }),
+                ),
+            )
+            .when(count > 0, |this| {
+                this.child(
+                    button("component-select", Lucide::Scan, "Select all instances").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            let instances = this.editor.doc.instances_of(id);
+                            this.editor.select(instances);
+                            this.inspector.invalidate();
+                            cx.notify();
+                        }),
+                    ),
+                )
+            })
+            .child(
+                button("component-remove", Lucide::Unlink, "Stop being a component").on_click(
+                    cx.listener(move |this, _, window, cx| {
+                        this.apply(window, cx, |e| e.remove_component(id));
+                    }),
+                ),
+            )
+        } else if doc.get(id).is_some_and(|n| n.attr(INSTANCE_ATTR).is_some()) {
+            let main = doc.main_of(id);
+            let overridden = doc.has_overrides(id);
+            let title = main
+                .and_then(|m| doc.component_name(m))
+                .map_or_else(|| "Missing component".to_owned(), ToOwned::to_owned);
+            row(
+                Lucide::Diamond,
+                title,
+                match (main, overridden) {
+                    (None, _) => "Its main component was deleted".to_owned(),
+                    (Some(_), true) => "Instance · overridden".to_owned(),
+                    (Some(_), false) => "Instance".to_owned(),
+                },
+            )
+            .when_some(main, |this, main| {
+                this.child(
+                    button("instance-main", Lucide::Component, "Go to main component").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.editor.select([main]);
+                            this.reveal(main, cx);
+                            this.inspector.invalidate();
+                            cx.notify();
+                        }),
+                    ),
+                )
+            })
+            .when(overridden, |this| {
+                this.child(
+                    button("instance-reset", Lucide::Undo2, "Reset overrides").on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.apply(window, cx, |e| e.reset_overrides(id));
+                        }),
+                    ),
+                )
+            })
+            .child(
+                button("instance-detach", Lucide::Unlink, "Detach instance (⌥⌘B)").on_click(
+                    cx.listener(move |this, _, window, cx| {
+                        this.apply(window, cx, |e| e.detach_instance(id));
+                    }),
+                ),
+            )
+        } else if let Some(root) = doc.instance_root(id) {
+            row(
+                Lucide::Diamond,
+                doc.display_name(root),
+                "Edits here override the instance".to_owned(),
+            )
+            .child(
+                button("instance-parent", Lucide::Scan, "Select instance").on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.editor.select([root]);
+                        this.inspector.invalidate();
+                        cx.notify();
+                    },
+                )),
+            )
+        } else {
+            return None;
+        };
+        Some(
+            div()
+                .px_3()
+                .py_2()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(content)
+                .into_any_element(),
+        )
+    }
+
     /// Align and distribute buttons for the selection.
     fn render_align_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
@@ -2038,6 +2190,7 @@ impl Studio {
         let mut panel = v_flex()
             .pb_8()
             .child(self.render_header(id, cx))
+            .children(self.render_component_section(id, cx))
             .child(self.render_align_bar(cx))
             .child(self.render_frame_section(id, &c, cx));
         if !is_text && !is_svg {

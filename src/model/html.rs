@@ -259,6 +259,11 @@ impl Importer<'_> {
             let mut node = Node::element(id, "svg");
             node.kind = NodeKind::Svg(strip_editor_attrs_from_svg(&element.html()));
             self.apply_common(&mut node, element);
+            for name in super::components::COMPONENT_ATTRS {
+                if let Some(value) = element.value().attr(name) {
+                    node.attrs.push((name.to_owned(), value.to_owned()));
+                }
+            }
             return Some(self.doc.add(node));
         }
 
@@ -327,7 +332,11 @@ fn strip_editor_attrs_from_svg(source: &str) -> String {
     };
     let (open, rest) = source.split_at(end);
     let mut cleaned = open.to_owned();
-    for name in EDITOR_ATTRS.iter().chain(&["style"]) {
+    for name in EDITOR_ATTRS
+        .iter()
+        .chain(&super::components::COMPONENT_ATTRS)
+        .chain(&["style"])
+    {
         while let Some(start) = cleaned.find(&format!(" {name}=\"")) {
             let value_start = start + name.len() + 3;
             let Some(value_len) = cleaned[value_start..].find('"') else {
@@ -431,6 +440,9 @@ fn open_tag(doc: &Document, node: &Node, tag: &str, options: ExportOptions) -> S
         }
     }
     for (name, value) in &node.attrs {
+        if !options.editor_attrs && super::components::COMPONENT_ATTRS.contains(&name.as_str()) {
+            continue;
+        }
         if value.is_empty() {
             out.push_str(&format!(" {name}"));
         } else {
