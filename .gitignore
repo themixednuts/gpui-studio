@@ -3,3 +3,6 @@
 *.log
 .DS_Store
 Thumbs.db
+
+# Studio caches materialized inline SVGs per project
+.gpui-studio/cache/

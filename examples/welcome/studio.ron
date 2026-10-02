@@ -1,0 +1,21 @@
+(
+    version: 1,
+    name: "Welcome",
+    pages: [
+        (
+            name: "Page 1",
+            artboards: [
+                (
+                    file: "landing-desktop.html",
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                (
+                    file: "landing-mobile.html",
+                    x: 1360.0,
+                    y: 0.0,
+                ),
+            ],
+        ),
+    ],
+)

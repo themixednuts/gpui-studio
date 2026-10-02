@@ -19,7 +19,9 @@ expected boundary, and whether credentials or user data were exposed.
 
 - Keep MCP disabled with `--no-mcp` when agent access is not required.
 - Treat enabled MCP clients as trusted local automation principals.
-- Open only projects whose Rust hooks and native components you trust.
+- Artboard HTML is inert: scripts, inline event handlers, and `javascript:` URLs
+  are dropped on import, and image sources are read only from local paths
+  (or fetched only when a design references a remote URL).
 - Keep `.gpui-studio/` project state private and out of source control unless a
   specific durable document is intentionally shared.
 - Review macOS Screen Recording and Linux portal permissions before enabling

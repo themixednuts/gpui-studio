@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "Apache-2.0"
-description = "Offline-first native visual builder for HTML-backed GPUI applications"
+description = "Offline-first native design canvas for HTML/CSS artboards, built on GPUI Kit with MCP agent tools"
 repository = "https://github.com/themixednuts/gpui-studio"
 homepage = "https://github.com/themixednuts/gpui-studio"
 readme = "README.md"
@@ -13,25 +13,26 @@ readme = "README.md"
 anyhow = "1.0.100"
 clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"
-gpui = "0.2.2"
-gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "668896ff66f982544925ace3fdf555616beb8f65" }
-gpui-mcp-html = { git = "https://github.com/themixednuts/gpui-mcp", rev = "668896ff66f982544925ace3fdf555616beb8f65", features = ["dev-watch"] }
-ron = "0.12.2"
+ego-tree = "0.11"
+gpui-kit = "=0.7.0"
+# GPUI Kit runs on gpui-pre, so the bridge uses its gpui-pre backend.
+gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da", default-features = false, features = ["gpui-pre"] }
 notify = "8.2.0"
-rstar = "0.13.0"
+ron = "0.12.2"
+scraper = { version = "0.27", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tempfile = "3.23.0"
 thiserror = "2.0.18"
-toml = { version = "1.1", features = ["serde"] }
 
 [dev-dependencies]
-gpui = { version = "0.2.2", features = ["test-support"] }
+gpui-kit = { version = "=0.7.0", features = ["test-support"] }
+gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da", default-features = false, features = ["gpui-pre", "test-support"] }
 
 [patch.crates-io]
-# gpui-mcp calls GPUI 0.2.2's public Window::dispatch_event API. The published crate
-# accidentally keeps that method's return type private; this patch changes only its visibility.
-gpui = { git = "https://github.com/themixednuts/gpui-mcp", rev = "668896ff66f982544925ace3fdf555616beb8f65" }
+# gpui-mcp's patched gpui-pre adds the automation hooks the bridge needs
+# (see its vendor/gpui/PATCHES.md). Pinned to the same tested commit.
+gpui-pre = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da" }
 
 [lints.rust]
 unsafe_code = "forbid"
