@@ -12,6 +12,7 @@ pub mod css;
 pub mod grid;
 pub mod html;
 pub mod style;
+pub mod variables;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -19,6 +20,7 @@ use std::fmt;
 pub use color::Color;
 pub use connection::{ArrowHeads, Connection, ConnectorStyle, Endpoint};
 pub use style::{Computed, Length, Style};
+pub use variables::Variables;
 
 /// Stable identity of one node, persisted as `data-id="n42"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -251,6 +253,8 @@ pub struct Document {
     nodes: BTreeMap<NodeId, Node>,
     /// Pages in order.
     pub pages: Vec<Page>,
+    /// Design variables (CSS custom properties on `:root`).
+    pub variables: Variables,
     next_id: u64,
     next_connection: u64,
 }
@@ -262,9 +266,46 @@ impl Document {
         Self {
             nodes: BTreeMap::new(),
             pages: vec![Page::new("Page 1")],
+            variables: Variables::new(),
             next_id: 1,
             next_connection: 1,
         }
+    }
+
+    /// Rewrite every inline style value. Returns how many nodes changed.
+    pub fn map_style_values(&mut self, mut f: impl FnMut(&str) -> String) -> usize {
+        let mut changed = 0;
+        for node in self.nodes.values_mut() {
+            if node.style.map_values(&mut f) {
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// How many layers reference a variable.
+    #[must_use]
+    pub fn variable_usage(&self, name: &str) -> usize {
+        let needle = format!("var(--{name}");
+        self.nodes
+            .values()
+            .filter(|n| {
+                n.style.iter().any(|(_, v)| {
+                    v.match_indices(&needle).any(|(i, _)| {
+                        v[i + needle.len()..]
+                            .chars()
+                            .next()
+                            .is_none_or(|c| c == ')' || c == ',' || c.is_whitespace())
+                    })
+                })
+            })
+            .count()
+    }
+
+    /// A node's computed style with design variables resolved.
+    #[must_use]
+    pub fn computed(&self, node: &Node) -> Computed {
+        node.style.computed_with(&self.variables)
     }
 
     /// Allocate a fresh identity.

@@ -5,6 +5,7 @@ mod inspector;
 mod paint;
 mod panels;
 mod studio;
+mod variables;
 mod workspace;
 
 use std::borrow::Cow;
@@ -349,7 +350,10 @@ gpui_kit::assets::icon_assets!(
         Pipette,
         SquareDashed,
         AlignHorizontalSpaceAround,
-        AlignVerticalSpaceAround
+        AlignVerticalSpaceAround,
+        Variable,
+        Unlink,
+        Hexagon
     ]
 );
 

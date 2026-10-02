@@ -51,10 +51,50 @@ impl CodeFormat {
 #[must_use]
 pub fn export(doc: &Document, id: NodeId, format: CodeFormat) -> String {
     match format {
-        CodeFormat::Html => to_html(doc, id, ExportOptions::CODE),
+        CodeFormat::Html => {
+            let html = to_html(doc, id, ExportOptions::CODE);
+            match crate::model::variables::root_rule(&used_variables(doc, id)) {
+                Some(rule) => format!("<style>\n{rule}\n</style>\n\n{html}"),
+                None => html,
+            }
+        }
         CodeFormat::HtmlCss => html_with_classes(doc, id),
         CodeFormat::Gpui => gpui(doc, id),
     }
+}
+
+/// Variables a subtree references, including the variables those refer to.
+fn used_variables(doc: &Document, id: NodeId) -> crate::model::Variables {
+    let mut pending: Vec<String> = Vec::new();
+    let collect = |value: &str, pending: &mut Vec<String>| {
+        let mut rest = value;
+        while let Some(start) = rest.find("var(--") {
+            let after = &rest[start + 6..];
+            let end = after
+                .find(|c: char| c == ')' || c == ',' || c.is_whitespace())
+                .unwrap_or(after.len());
+            pending.push(after[..end].to_owned());
+            rest = &after[end..];
+        }
+    };
+    for node in std::iter::once(id).chain(doc.descendants(id)) {
+        if let Some(node) = doc.get(node) {
+            for (_, value) in node.style.iter() {
+                collect(value, &mut pending);
+            }
+        }
+    }
+    let mut used = crate::model::Variables::new();
+    while let Some(name) = pending.pop() {
+        if used.contains_key(&name) {
+            continue;
+        }
+        if let Some(value) = doc.variables.get(&name) {
+            collect(value, &mut pending);
+            used.insert(name, value.clone());
+        }
+    }
+    used
 }
 
 fn class_slug(name: &str) -> String {
@@ -84,8 +124,11 @@ fn html_with_classes(doc: &Document, id: NodeId) -> String {
     let mut css = String::new();
     let mut html = String::new();
     write_classed(doc, id, 0, &mut used, &mut css, &mut html);
+    let root = crate::model::variables::root_rule(&used_variables(doc, id))
+        .map(|rule| format!("{rule}\n"))
+        .unwrap_or_default();
     format!(
-        "<style>\n*, *::before, *::after {{ box-sizing: border-box; }}\n{css}</style>\n\n{html}"
+        "<style>\n*, *::before, *::after {{ box-sizing: border-box; }}\n{root}{css}</style>\n\n{html}"
     )
 }
 
@@ -443,7 +486,7 @@ fn write_gpui(doc: &Document, id: NodeId, depth: usize, out: &mut String) {
             if let Some(name) = &node.name {
                 let _ = write!(out, "\n{indent}.id({:?})", class_slug(name));
             }
-            for call in gpui_style_calls(&node.style.computed()) {
+            for call in gpui_style_calls(&doc.computed(node)) {
                 let _ = write!(out, "\n{indent}.{call}");
             }
             if doc.is_text_layer(id) {

@@ -41,6 +41,7 @@ pub struct ImportOptions {
 /// the body's content is wrapped in a new `div`.
 pub fn parse_document(doc: &mut Document, source: &str, options: ImportOptions) -> NodeId {
     let html = Html::parse_document(source);
+    adopt_root_variables(doc, &html);
     let styles = collect_rules(&html);
     let title = Selector::parse("title")
         .ok()
@@ -83,6 +84,7 @@ fn doc_node(doc: &mut Document, id: NodeId) -> Option<&mut Node> {
 /// unless `keep_ids`).
 pub fn parse_fragment(doc: &mut Document, source: &str, options: ImportOptions) -> Vec<NodeId> {
     let html = Html::parse_fragment(source);
+    adopt_root_variables(doc, &html);
     let styles = collect_rules(&html);
     let mut importer = Importer {
         doc,
@@ -100,6 +102,34 @@ pub fn parse_fragment(doc: &mut Document, source: &str, options: ImportOptions) 
         root
     };
     importer.import_children(container)
+}
+
+/// Custom properties declared on `:root` (or `html`) become design variables
+/// unless the project already defines them.
+fn adopt_root_variables(doc: &mut Document, html: &Html) {
+    let Ok(style_selector) = Selector::parse("style") else {
+        return;
+    };
+    for style in html.select(&style_selector) {
+        let sheet = style.text().collect::<String>();
+        for rule in parse_stylesheet(&sheet) {
+            if !rule
+                .selector
+                .split(',')
+                .any(|s| matches!(s.trim(), ":root" | "html"))
+            {
+                continue;
+            }
+            for (property, value) in &rule.declarations {
+                if let Some(name) = property
+                    .strip_prefix("--")
+                    .and_then(super::variables::normalize_name)
+                {
+                    doc.variables.entry(name).or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
 }
 
 type RuleMap = HashMap<ego_tree::NodeId, Vec<((u16, u16, u16), usize, Vec<(String, String)>)>>;
@@ -378,8 +408,11 @@ pub fn to_html(doc: &Document, id: NodeId, options: ExportOptions) -> String {
 pub fn artboard_document(doc: &Document, root: NodeId) -> String {
     let title = escape_text(&doc.display_name(root));
     let body = to_html(doc, root, ExportOptions::STORAGE);
+    let variables = super::variables::root_rule(&doc.variables)
+        .map(|rule| format!("\n{}", rule.replace("</", "<\\/")))
+        .unwrap_or_default();
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n  <style>*, *::before, *::after {{ box-sizing: border-box; }} body {{ margin: 0; }}</style>\n</head>\n<body>\n{body}</body>\n</html>\n"
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n  <style>*, *::before, *::after {{ box-sizing: border-box; }} body {{ margin: 0; }}{variables}</style>\n</head>\n<body>\n{body}</body>\n</html>\n"
     )
 }
 

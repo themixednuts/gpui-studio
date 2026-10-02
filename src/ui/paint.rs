@@ -256,7 +256,7 @@ impl Painter<'_> {
             }
             NodeKind::Svg(source) => Some(self.svg(id, node, source)),
             NodeKind::Element { tag } => {
-                let computed = node.style.computed();
+                let computed = self.doc.computed(node);
                 if computed.display == Display::None {
                     return None;
                 }
@@ -644,7 +644,7 @@ impl Painter<'_> {
             let _ = std::fs::create_dir_all(self.cache_dir);
             let _ = std::fs::write(&path, source);
         }
-        let c = node.style.computed();
+        let c = self.doc.computed(node);
         let attr_px = |name: &str| {
             let tag_end = source.find('>').unwrap_or(source.len());
             let head = &source[..tag_end];
@@ -710,8 +710,8 @@ impl Painter<'_> {
         self.doc.get(id).is_some_and(|n| {
             !n.hidden
                 && !matches!(&n.kind, NodeKind::Text(t) if t.trim().is_empty())
-                && n.style.computed().position != Position::Absolute
-                && n.style.computed().display != Display::None
+                && self.doc.computed(n).position != Position::Absolute
+                && self.doc.computed(n).display != Display::None
         })
     }
 
@@ -737,7 +737,7 @@ impl Painter<'_> {
                 let computed = self
                     .doc
                     .get(*id)
-                    .map(|n| n.style.computed())
+                    .map(|n| self.doc.computed(n))
                     .unwrap_or_default();
                 ColumnPlacement::parse(computed.grid_column.as_deref())
             })
@@ -799,7 +799,7 @@ impl Painter<'_> {
             if self
                 .doc
                 .get(*child)
-                .is_some_and(|n| n.style.computed().position == Position::Absolute)
+                .is_some_and(|n| self.doc.computed(n).position == Position::Absolute)
                 && let Some(child) = self.node(*child, inherited, false)
             {
                 el = el.child(child);
@@ -873,7 +873,7 @@ impl Painter<'_> {
                     text.push('\n');
                     return;
                 }
-                let c = node.style.computed();
+                let c = self.doc.computed(node);
                 let mut style = style;
                 if let Some(color) = c.color {
                     style.color = Some(hsla(color));

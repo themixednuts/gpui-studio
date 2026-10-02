@@ -32,6 +32,7 @@ use crate::workspace::{PanelLayout, ViewState};
 pub(crate) enum LeftTab {
     Layers,
     Assets,
+    Variables,
 }
 
 /// Which tab the right sidebar shows.
@@ -68,6 +69,8 @@ pub(crate) struct Studio {
     /// Connector selected on the canvas (separate from layer selection).
     pub(crate) selected_connection: Option<u64>,
     pub(crate) panels: PanelLayout,
+    /// Variable being edited in the Variables tab: (name, editing the value?, input).
+    pub(crate) variable_edit: Option<(String, bool, Entity<InputState>)>,
     /// Pending drop target while dragging a row in the layer list.
     pub(crate) layer_drop: Option<(NodeId, crate::editor::DropPosition)>,
     panel_drag: Option<(PanelSide, f32, f32)>,
@@ -116,6 +119,7 @@ impl Studio {
             selected_connection: None,
             panels: panels.clamped(),
             layer_drop: None,
+            variable_edit: None,
             panel_drag: None,
             shown_status: String::new(),
             _subscriptions: Vec::new(),

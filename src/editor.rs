@@ -1219,6 +1219,81 @@ impl Editor {
         self.move_by(&moves, None)
     }
 
+    /// Create or update a design variable. Returns its normalized name.
+    pub fn set_variable(&mut self, name: &str, value: &str) -> Result<String> {
+        let name = crate::model::variables::normalize_name(name)
+            .context("variable names need letters or digits")?;
+        let value = value.trim().trim_end_matches(';').trim();
+        if value.is_empty() {
+            bail!("variable --{name} needs a value");
+        }
+        if value.contains(['{', '}', '<']) {
+            bail!("variable values cannot contain braces or markup");
+        }
+        let mut probe = self.doc.variables.clone();
+        probe.insert(name.clone(), value.to_owned());
+        if crate::model::variables::resolve(value, &probe).is_none() {
+            bail!("--{name} refers to a missing or circular variable");
+        }
+        let value = value.to_owned();
+        let key = format!("variable-{name}");
+        self.edit(Some(&key), |doc| {
+            doc.variables.insert(name.clone(), value);
+            Ok(())
+        })?;
+        Ok(name)
+    }
+
+    /// Rename a variable and every reference to it.
+    pub fn rename_variable(&mut self, from: &str, to: &str) -> Result<String> {
+        let to = crate::model::variables::normalize_name(to)
+            .context("variable names need letters or digits")?;
+        if !self.doc.variables.contains_key(from) {
+            bail!("no variable --{from}");
+        }
+        if to == from {
+            return Ok(to);
+        }
+        if self.doc.variables.contains_key(&to) {
+            bail!("--{to} already exists");
+        }
+        let from = from.to_owned();
+        self.edit(None, |doc| {
+            if let Some(value) = doc.variables.remove(&from) {
+                doc.variables.insert(to.clone(), value);
+            }
+            for value in doc.variables.values_mut() {
+                *value = crate::model::variables::rename_references(value, &from, &to);
+            }
+            doc.map_style_values(|v| crate::model::variables::rename_references(v, &from, &to));
+            Ok(())
+        })?;
+        Ok(to)
+    }
+
+    /// Delete a variable, replacing references with its value. Returns how
+    /// many layers were detached.
+    pub fn delete_variable(&mut self, name: &str) -> Result<usize> {
+        let value = self
+            .doc
+            .variables
+            .get(name)
+            .cloned()
+            .with_context(|| format!("no variable --{name}"))?;
+        // Inline the declared value, so references to other variables survive.
+        let resolved = value;
+        let name = name.to_owned();
+        self.edit(None, |doc| {
+            doc.variables.remove(&name);
+            for v in doc.variables.values_mut() {
+                *v = crate::model::variables::inline_references(v, &name, &resolved);
+            }
+            Ok(doc.map_style_values(|v| {
+                crate::model::variables::inline_references(v, &name, &resolved)
+            }))
+        })
+    }
+
     /// Set a fixed size in document pixels.
     pub fn set_size(
         &mut self,
@@ -1302,6 +1377,41 @@ mod tests {
                 .import_image(&png, "a.png", ImagePlacement::default())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn variables_resolve_rename_and_detach() {
+        let (mut editor, board) = editor();
+        let name = editor.set_variable("--Brand", "#ff5a36").unwrap();
+        assert_eq!(name, "brand");
+        editor
+            .set_styles(
+                &[board],
+                &[("background-color".into(), Some("var(--brand)".into()))],
+                None,
+            )
+            .unwrap();
+        let node = editor.doc.get(board).unwrap();
+        assert_eq!(
+            editor.doc.computed(node).background,
+            crate::model::Color::parse("#ff5a36")
+        );
+        assert!(editor.set_variable("loop", "var(--loop)").is_err());
+        assert!(editor.set_variable("bad", "red; } body {").is_err());
+        assert_eq!(editor.doc.variable_usage("brand"), 1);
+        editor.rename_variable("brand", "primary").unwrap();
+        assert_eq!(
+            editor.doc.get(board).unwrap().style.get("background-color"),
+            Some("var(--primary)")
+        );
+        assert_eq!(editor.delete_variable("primary").unwrap(), 1);
+        assert_eq!(
+            editor.doc.get(board).unwrap().style.get("background-color"),
+            Some("#ff5a36")
+        );
+        assert!(editor.doc.variables.is_empty());
+        assert!(editor.undo());
+        assert!(editor.doc.variables.contains_key("primary"));
     }
 
     #[test]

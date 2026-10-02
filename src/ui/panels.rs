@@ -107,7 +107,7 @@ impl Studio {
                 if doc.is_text_layer(id) {
                     return Lucide::Type;
                 }
-                let computed = node.style.computed();
+                let computed = self.editor.doc.computed(node);
                 match computed.display {
                     Display::Flex if computed.direction.is_column() => Lucide::Rows3,
                     Display::Flex => Lucide::Columns3,
@@ -610,6 +610,13 @@ impl Studio {
                 .overflow_y_scrollbar()
                 .child(self.render_assets(cx))
                 .into_any_element(),
+            LeftTab::Variables => div()
+                .id("variables-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .child(self.render_variables(cx))
+                .into_any_element(),
         };
         v_flex()
             .size_full()
@@ -625,14 +632,16 @@ impl Studio {
                         .selected_index(match tab {
                             LeftTab::Layers => 0,
                             LeftTab::Assets => 1,
+                            LeftTab::Variables => 2,
                         })
                         .child(Tab::new().label("Layers"))
                         .child(Tab::new().label("Assets"))
+                        .child(Tab::new().label("Variables"))
                         .on_click(cx.listener(|this, index: &usize, _, cx| {
-                            this.left_tab = if *index == 0 {
-                                LeftTab::Layers
-                            } else {
-                                LeftTab::Assets
+                            this.left_tab = match *index {
+                                0 => LeftTab::Layers,
+                                1 => LeftTab::Assets,
+                                _ => LeftTab::Variables,
                             };
                             cx.notify();
                         })),

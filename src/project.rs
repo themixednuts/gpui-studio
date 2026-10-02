@@ -35,6 +35,8 @@ struct Manifest {
     version: u16,
     name: String,
     pages: Vec<ManifestPage>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    variables: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -159,6 +161,13 @@ impl Project {
         self.known_manifest = manifest_text;
         let mut doc = Document::new();
         doc.pages.clear();
+        doc.variables = manifest
+            .variables
+            .into_iter()
+            .filter_map(|(name, value)| {
+                Some((crate::model::variables::normalize_name(&name)?, value))
+            })
+            .collect();
         for page in manifest.pages {
             let mut artboards = Vec::new();
             for entry in page.artboards {
@@ -217,6 +226,7 @@ impl Project {
         let manifest = Manifest {
             version: 1,
             name: self.name.clone(),
+            variables: doc.variables.clone(),
             pages: doc
                 .pages
                 .iter()
@@ -352,6 +362,27 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn variables_persist_in_the_manifest_and_every_artboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut project, mut doc) = Project::open(dir.path()).unwrap();
+        doc.variables.insert("brand".into(), "#ff5a36".into());
+        project.save(&doc).unwrap();
+        let file = doc.pages[0].artboards[0].file.clone();
+        let html = std::fs::read_to_string(project.artboard_path(&file)).unwrap();
+        assert!(html.contains(":root {\n  --brand: #ff5a36;\n}"), "{html}");
+        let reloaded = project.load().unwrap();
+        assert_eq!(reloaded.variables, doc.variables);
+        // Variables declared only in an artboard's :root are adopted.
+        let mut fresh = Document::new();
+        crate::model::html::parse_document(
+            &mut fresh,
+            "<style>:root { --gap: 12px }</style><div style=\"gap: var(--gap)\"></div>",
+            KEEP_IDS,
+        );
+        assert_eq!(fresh.variables.get("gap").map(String::as_str), Some("12px"));
+    }
 
     #[test]
     fn scaffolds_saves_reloads_and_merges_external_edits() {

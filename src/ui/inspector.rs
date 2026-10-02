@@ -184,7 +184,7 @@ impl Studio {
         self.editor
             .doc
             .get(id)
-            .map(|n| n.style.computed())
+            .map(|n| self.editor.doc.computed(n))
             .unwrap_or_default()
     }
 
@@ -730,6 +730,102 @@ impl Studio {
 
     fn labeled(&self, label: &'static str, field: Field, cx: &Context<Self>) -> AnyElement {
         self.field_box(label, field, cx).into_any_element()
+    }
+
+    /// A color field that can be bound to a color variable. When the
+    /// property is `var(--name)` the variable shows as a chip.
+    fn bound_color_row(
+        &self,
+        field: Field,
+        property: &'static str,
+        color: Option<Color>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::model::variables::{VariableKind, kind_of, reference};
+        let theme = cx.theme().clone();
+        let vars = self.editor.doc.variables.clone();
+        let bound = self
+            .editor
+            .primary()
+            .and_then(|id| self.editor.doc.get(id))
+            .and_then(|n| n.style.get(property))
+            .and_then(reference)
+            .map(ToOwned::to_owned);
+        let colors: Vec<String> = vars
+            .iter()
+            .filter(|(_, v)| kind_of(v, &vars) == VariableKind::Color)
+            .map(|(n, _)| n.clone())
+            .collect();
+        let entity = cx.entity();
+        let picker = (!colors.is_empty()).then(|| {
+            Button::new(SharedString::from(format!("bind-{property}")))
+                .icon(Icon::new(Lucide::Hexagon))
+                .ghost()
+                .xsmall()
+                .tooltip("Use a color variable")
+                .dropdown_menu(move |mut menu, _, _| {
+                    for name in &colors {
+                        let entity = entity.clone();
+                        let value = format!("var(--{name})");
+                        menu = menu.item(PopupMenuItem::new(format!("--{name}")).on_click(
+                            move |_, window, cx| {
+                                let value = value.clone();
+                                entity.update(cx, |this, cx| {
+                                    this.set(vec![(property, Some(value.as_str()))], window, cx);
+                                    this.inspector.invalidate();
+                                });
+                            },
+                        ));
+                    }
+                    menu.max_h(px(320.0)).scrollable(true)
+                })
+        });
+        let row = match bound {
+            Some(name) => h_flex()
+                .flex_1()
+                .min_w_0()
+                .h(px(28.0))
+                .pl_2()
+                .pr_0p5()
+                .gap_2()
+                .rounded(px(6.0))
+                .bg(Self::field_fill(cx))
+                .text_xs()
+                .child(
+                    div()
+                        .size(px(14.0))
+                        .rounded(px(3.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(color.map_or(gpui_kit::transparent_black(), hsla)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(format!("--{name}")),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("detach-{property}")))
+                        .icon(Icon::new(Lucide::Unlink))
+                        .ghost()
+                        .xsmall()
+                        .tooltip("Detach variable")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            let value = color.map(|c| c.to_css());
+                            this.set(vec![(property, value.as_deref())], window, cx);
+                            this.inspector.invalidate();
+                        })),
+                )
+                .into_any_element(),
+            None => self.color_row(field, color, cx),
+        };
+        h_flex()
+            .gap_1()
+            .child(div().flex_1().min_w_0().child(row))
+            .children(picker)
+            .into_any_element()
     }
 
     fn color_row(&self, field: Field, color: Option<Color>, cx: &Context<Self>) -> AnyElement {
@@ -1426,7 +1522,12 @@ impl Studio {
             },
         );
         if has_fill {
-            section = section.child(self.color_row(Field::Fill, c.background, cx));
+            section = section.child(self.bound_color_row(
+                Field::Fill,
+                "background-color",
+                c.background,
+                cx,
+            ));
         }
         section.into_any_element()
     }
@@ -1488,7 +1589,7 @@ impl Studio {
         );
         if has_border {
             section = section
-                .child(self.color_row(Field::Stroke, c.border_color, cx))
+                .child(self.bound_color_row(Field::Stroke, "border-color", c.border_color, cx))
                 .child(
                     h_flex()
                         .gap_2()
@@ -1633,7 +1734,7 @@ impl Studio {
                     .child(self.labeled("S", Field::FontSize, cx))
                     .child(self.labeled("LH", Field::LineHeight, cx)),
             )
-            .child(self.color_row(Field::TextColor, c.color, cx))
+            .child(self.bound_color_row(Field::TextColor, "color", c.color, cx))
             .child(
                 self.segment_group(cx)
                     .child(self.segment(

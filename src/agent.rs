@@ -383,6 +383,47 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: true,
     },
     CommandSpec {
+        name: "list_variables",
+        title: "List variables",
+        description: "Design variables (CSS custom properties on :root) with their values, resolved values, kind (color, number, other), and how many layers use each. Use them in styles as var(--name).",
+        schema: || object(json!({}), &[]),
+        mutating: false,
+    },
+    CommandSpec {
+        name: "set_variable",
+        title: "Set variable",
+        description: "Create or update a design variable. Layers styled with var(--name) update everywhere.",
+        schema: || {
+            object(
+                json!({
+                    "name": { "type": "string", "description": "Name such as \"brand\" or \"space-4\" (a leading -- is optional)." },
+                    "value": { "type": "string", "description": "Any CSS value, e.g. #ff5a36, 16px, or var(--other)." }
+                }),
+                &["name", "value"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "rename_variable",
+        title: "Rename variable",
+        description: "Rename a design variable and every var() reference to it.",
+        schema: || {
+            object(
+                json!({ "name": { "type": "string" }, "new_name": { "type": "string" } }),
+                &["name", "new_name"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "delete_variable",
+        title: "Delete variable",
+        description: "Delete a design variable; layers that used it keep its value inline.",
+        schema: || object(json!({ "name": { "type": "string" } }), &["name"]),
+        mutating: true,
+    },
+    CommandSpec {
         name: "import_image",
         title: "Import image",
         description: "Copy a local image file (png, jpg, gif, webp, svg, bmp) into the project's artboards/assets/ and place it as an <img> layer: inside parent_id (absolutely at x/y in block flow, or at index in flex/grid), or as a new artboard at canvas x/y when parent_id is omitted.",
@@ -666,6 +707,31 @@ struct NodesArg {
     node_ids: Vec<String>,
 }
 
+/// Every design variable with its resolved value, kind, and usage count.
+#[must_use]
+pub fn variables_json(editor: &Editor) -> Value {
+    use crate::model::variables::{VariableKind, kind_of, resolve};
+    let vars = &editor.doc.variables;
+    Value::Array(
+        vars.iter()
+            .map(|(name, value)| {
+                json!({
+                    "name": name,
+                    "css": format!("var(--{name})"),
+                    "value": value,
+                    "resolved": resolve(value, vars),
+                    "kind": match kind_of(value, vars) {
+                        VariableKind::Color => "color",
+                        VariableKind::Number => "number",
+                        VariableKind::Other => "other",
+                    },
+                    "used_by": editor.doc.variable_usage(name),
+                })
+            })
+            .collect(),
+    )
+}
+
 /// Rendered bounds in document pixels, when the canvas has laid the node out.
 fn bounds_json(editor: &Editor, id: NodeId) -> Value {
     editor.measured.get(&id).map_or(
@@ -685,6 +751,36 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
             Ok(
                 json!({ "id": id.to_string(), "html": editor.html_of(id, true), "bounds": bounds_json(editor, id) }),
             )
+        }
+        "list_variables" => Ok(variables_json(editor)),
+        "set_variable" => {
+            #[derive(Deserialize)]
+            struct A {
+                name: String,
+                value: String,
+            }
+            let a: A = args(arguments)?;
+            let name = editor.set_variable(&a.name, &a.value)?;
+            Ok(json!({ "name": name, "revision": editor.revision }))
+        }
+        "rename_variable" => {
+            #[derive(Deserialize)]
+            struct A {
+                name: String,
+                new_name: String,
+            }
+            let a: A = args(arguments)?;
+            let name = editor.rename_variable(a.name.trim_start_matches("--"), &a.new_name)?;
+            Ok(json!({ "name": name, "revision": editor.revision }))
+        }
+        "delete_variable" => {
+            #[derive(Deserialize)]
+            struct A {
+                name: String,
+            }
+            let a: A = args(arguments)?;
+            let detached = editor.delete_variable(a.name.trim_start_matches("--"))?;
+            Ok(json!({ "detached_layers": detached, "revision": editor.revision }))
         }
         "import_image" => {
             #[derive(Deserialize)]
@@ -1174,6 +1270,11 @@ pub const RESOURCES: &[(&str, &str, &str)] = &[
         "components",
         "Built-in component library.",
     ),
+    (
+        "gpui-studio://variables",
+        "variables",
+        "Design variables (CSS custom properties) to style with var(--name).",
+    ),
 ];
 
 /// Read one resource.
@@ -1185,6 +1286,7 @@ pub fn read_resource(editor: &Editor, uri: &str) -> Option<String> {
         "gpui-studio://comments/active" => comments_json(editor, false),
         "gpui-studio://comments/all" => comments_json(editor, true),
         "gpui-studio://components" => execute_readonly(editor, "list_components"),
+        "gpui-studio://variables" => variables_json(editor),
         _ => return None,
     };
     serde_json::to_string_pretty(&value).ok()
@@ -1495,5 +1597,67 @@ mod tests {
         );
         let node = execute(&mut editor, "get_node", json!({ "node_id": names[2] })).unwrap();
         assert_eq!(node["bounds"]["width"], 20.0);
+    }
+
+    #[test]
+    fn agent_manages_variables() {
+        let mut editor = demo_editor();
+        execute(
+            &mut editor,
+            "set_variable",
+            json!({ "name": "--brand", "value": "#ff5a36" }),
+        )
+        .unwrap();
+        execute(
+            &mut editor,
+            "set_variable",
+            json!({ "name": "accent", "value": "var(--brand)" }),
+        )
+        .unwrap();
+        let board = editor.doc.pages[0].artboards[0].root.to_string();
+        execute(
+            &mut editor,
+            "update_styles",
+            json!({ "node_ids": [board], "styles": { "background-color": "var(--accent)" } }),
+        )
+        .unwrap();
+        let list = execute(&mut editor, "list_variables", json!({})).unwrap();
+        let accent = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == "accent")
+            .unwrap();
+        assert_eq!(accent["resolved"], "#ff5a36");
+        assert_eq!(accent["kind"], "color");
+        assert_eq!(accent["used_by"], 1);
+        execute(
+            &mut editor,
+            "rename_variable",
+            json!({ "name": "brand", "new_name": "primary" }),
+        )
+        .unwrap();
+        assert_eq!(
+            editor.doc.variables.get("accent").map(String::as_str),
+            Some("var(--primary)")
+        );
+        execute(&mut editor, "delete_variable", json!({ "name": "accent" })).unwrap();
+        let html = execute(
+            &mut editor,
+            "export_code",
+            json!({ "node_id": board, "format": "html" }),
+        )
+        .unwrap();
+        let code = html["code"].as_str().unwrap();
+        assert!(
+            code.contains("var(--primary)") && code.contains("--primary: #ff5a36;"),
+            "{code}"
+        );
+        assert!(
+            read_resource(&editor, "gpui-studio://variables")
+                .unwrap()
+                .contains("primary")
+        );
+        assert!(execute(&mut editor, "delete_variable", json!({ "name": "nope" })).is_err());
     }
 }

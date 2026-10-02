@@ -64,6 +64,19 @@ impl Style {
         }
     }
 
+    /// Rewrite declaration values in place. Returns whether any changed.
+    pub fn map_values(&mut self, mut f: impl FnMut(&str) -> String) -> bool {
+        let mut changed = false;
+        for (_, value) in &mut self.decls {
+            let next = f(value);
+            if next != *value {
+                *value = next;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Remove every declaration of exactly this property.
     pub fn remove(&mut self, property: &str) {
         self.decls.retain(|(p, _)| p != property);
@@ -101,10 +114,33 @@ impl Style {
     }
 
     /// Resolve typed values, expanding shorthands in declaration order.
+    /// `var()` references are unresolved (see [`Style::computed_with`]).
     #[must_use]
     pub fn computed(&self) -> Computed {
+        self.computed_with(&super::variables::Variables::new())
+    }
+
+    /// Like [`Style::computed`], substituting design variables first. A
+    /// declaration whose `var()` cannot be resolved is ignored, as in CSS.
+    #[must_use]
+    pub fn computed_with(&self, vars: &super::variables::Variables) -> Computed {
         let mut computed = Computed::default();
         for (property, value) in &self.decls {
+            if property.starts_with("--") {
+                continue;
+            }
+            let resolved;
+            let value = if value.contains("var(") {
+                match super::variables::resolve(value, vars) {
+                    Some(v) => {
+                        resolved = v;
+                        &resolved
+                    }
+                    None => continue,
+                }
+            } else {
+                value
+            };
             let expanded = expand(property, value);
             if expanded.is_empty() {
                 computed.apply(property, value);

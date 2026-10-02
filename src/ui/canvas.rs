@@ -379,7 +379,7 @@ impl Studio {
     /// Artboard rectangle from the document (no layout needed).
     fn artboard_rect(&self, root: NodeId) -> Option<DocRect> {
         let artboard = self.editor.doc.artboard_of(root)?;
-        let computed = self.editor.doc.get(root)?.style.computed();
+        let computed = self.editor.doc.computed(self.editor.doc.get(root)?);
         let laid_out = self.canvas.doc_bounds(root);
         Some(DocRect {
             x: artboard.x,
@@ -622,7 +622,7 @@ impl Studio {
                 .editor
                 .doc
                 .get(id)
-                .map(|n| n.style.computed())
+                .map(|n| self.editor.doc.computed(n))
                 .unwrap_or_default();
             let insets = (
                 computed.inset[3].px().unwrap_or(0.0),
@@ -1181,15 +1181,16 @@ impl Studio {
                     };
                 }
                 let absolute = |n: NodeId| {
-                    doc.get(n)
-                        .is_some_and(|node| node.style.computed().position == Position::Absolute)
+                    doc.get(n).is_some_and(|node| {
+                        self.editor.doc.computed(node).position == Position::Absolute
+                    })
                 };
                 if absolute(id) {
                     let origins = selection
                         .iter()
                         .filter(|s| absolute(**s))
                         .filter_map(|s| {
-                            let computed = doc.get(*s)?.style.computed();
+                            let computed = doc.computed(doc.get(*s)?);
                             let (left, top) = match (computed.inset[3].px(), computed.inset[0].px())
                             {
                                 (Some(l), Some(t)) => (l, t),
@@ -1229,7 +1230,7 @@ impl Studio {
             .copied()
             .find(|id| self.is_container(*id) && !doc.is_ancestor_or_self(dragged, *id))
             .or_else(|| doc.parent(dragged))?;
-        let computed = doc.get(container)?.style.computed();
+        let computed = doc.computed(doc.get(container)?);
         let horizontal = computed.display == Display::Flex && !computed.direction.is_column()
             || computed.display == Display::Grid;
         let all = doc.children(container).to_vec();
@@ -1241,7 +1242,7 @@ impl Studio {
                     && doc.get(*c).is_some_and(|n| {
                         !n.hidden
                             && !n.is_text()
-                            && n.style.computed().position != Position::Absolute
+                            && self.editor.doc.computed(n).position != Position::Absolute
                     })
             })
             .collect();
@@ -1388,7 +1389,7 @@ impl Studio {
         }
         let absolute = doc
             .get(id)
-            .is_some_and(|n| n.style.computed().position == Position::Absolute);
+            .is_some_and(|n| self.editor.doc.computed(n).position == Position::Absolute);
         let mut changes = Vec::new();
         if changes_width {
             changes.push(("width".to_owned(), Some(format!("{}px", fmt_num(w)))));
@@ -1556,7 +1557,7 @@ impl Studio {
             .editor
             .doc
             .get(parent)
-            .map(|n| n.style.computed())
+            .map(|n| self.editor.doc.computed(n))
             .unwrap_or_default();
         let flow = matches!(parent_computed.display, Display::Flex | Display::Grid);
         let mut style = match tool {
@@ -1877,9 +1878,12 @@ impl Studio {
                 index: None,
             };
         };
-        let flow = doc
-            .get(parent)
-            .is_some_and(|n| matches!(n.style.computed().display, Display::Flex | Display::Grid));
+        let flow = doc.get(parent).is_some_and(|n| {
+            matches!(
+                self.editor.doc.computed(n).display,
+                Display::Flex | Display::Grid
+            )
+        });
         let origin = self
             .canvas
             .doc_bounds(parent)
@@ -2018,7 +2022,7 @@ impl Studio {
                     .editor
                     .doc
                     .get(*id)
-                    .is_some_and(|n| n.style.computed().position == Position::Absolute)
+                    .is_some_and(|n| self.editor.doc.computed(n).position == Position::Absolute)
         });
         if movable {
             self.apply(window, cx, |e| e.nudge(&selection, dx, dy));
@@ -2159,7 +2163,7 @@ impl Studio {
                                             .editor
                                             .doc
                                             .get(*id)
-                                            .map(|n| n.style.computed())
+                                            .map(|n| self.editor.doc.computed(n))
                                             .unwrap_or_default();
                                         let w = c.width.px().unwrap_or(d.size.width).round();
                                         let h = c.height.px().unwrap_or(d.size.height).round();
@@ -2199,8 +2203,9 @@ impl Studio {
         {
             let doc = &self.editor.doc;
             self.canvas.layout.borrow_mut().retain(|id, _| {
-                doc.get(*id)
-                    .is_some_and(|n| !n.hidden && n.style.computed().display != Display::None)
+                doc.get(*id).is_some_and(|n| {
+                    !n.hidden && self.editor.doc.computed(n).display != Display::None
+                })
             });
         }
         let measured = self.canvas.layout.borrow().clone();
