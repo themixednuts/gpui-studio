@@ -442,6 +442,22 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: true,
     },
     CommandSpec {
+        name: "export_image",
+        title: "Export image",
+        description: "Render a layer or artboard to PNG (at scale) or SVG in the project's exports/ folder, laid out exactly as on the canvas. Returns the file path; the file is written within a moment.",
+        schema: || {
+            object(
+                json!({
+                    "node_id": { "type": "string", "description": NODE },
+                    "format": { "type": "string", "enum": ["png", "svg"] },
+                    "scale": { "type": "number", "minimum": 0.1, "maximum": 8 }
+                }),
+                &["node_id"],
+            )
+        },
+        mutating: false,
+    },
+    CommandSpec {
         name: "list_links",
         title: "List prototype links",
         description: "Prototype links on the current page: which layer navigates to which artboard (or back) and with what transition.",
@@ -895,6 +911,9 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
             }
             Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
         }
+        "export_image" => Err(AgentError::Invalid(
+            "export_image needs the Studio window to lay the layer out".into(),
+        )),
         "list_links" => {
             use crate::model::prototype::LinkTarget;
             let doc = &editor.doc;

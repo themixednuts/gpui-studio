@@ -11,6 +11,7 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.100"
+base64 = "0.23.1"
 clap = { version = "4.6.1", features = ["derive"] }
 directories = "6.0.0"
 ego-tree = "0.11"
@@ -19,6 +20,7 @@ gpui-kit = "=0.7.0"
 gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da", default-features = false, features = ["gpui-pre"] }
 imagesize = "0.15.0"
 notify = "8.2.0"
+resvg = "0.45"
 ron = "0.12.2"
 scraper = { version = "0.27", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }

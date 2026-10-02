@@ -11,6 +11,7 @@ pub mod assets;
 pub mod comments;
 pub mod editor;
 pub mod export;
+pub mod export_image;
 pub mod geometry;
 pub mod history;
 pub mod model;

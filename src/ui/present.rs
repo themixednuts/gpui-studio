@@ -195,6 +195,7 @@ impl Studio {
             editing: None,
             unsettled: std::cell::Cell::new(false),
             measured: &measured,
+            texts: None,
         };
         let screen = painter.artboard(current);
         if painter.unsettled.get() {

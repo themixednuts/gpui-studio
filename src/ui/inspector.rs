@@ -1116,6 +1116,102 @@ impl Studio {
         )
     }
 
+    /// PNG/SVG export of the selected layer.
+    fn render_export_section(&self, id: NodeId, cx: &mut Context<Self>) -> AnyElement {
+        use super::image_export::ExportTarget;
+        use crate::export_image::ImageFormat;
+        let format = self.export_format;
+        let scale = self.export_scale;
+        let busy = self.export_job.is_some();
+        let mut formats = self.segment_group(cx).flex_1();
+        for (option, label) in [(ImageFormat::Png, "PNG"), (ImageFormat::Svg, "SVG")] {
+            formats = formats.child(self.segment(
+                format!("export-format-{label}"),
+                label,
+                None,
+                format == option,
+                "Export format",
+                cx,
+                move |this, _, cx| {
+                    this.export_format = option;
+                    cx.notify();
+                },
+            ));
+        }
+        let mut scales = self.segment_group(cx).flex_1();
+        for option in [1.0_f32, 2.0, 3.0] {
+            scales = scales.child(self.segment(
+                format!("export-scale-{option}"),
+                format!("{}×", crate::model::style::fmt_num(option)),
+                None,
+                (scale - option).abs() < f32::EPSILON,
+                "PNG scale",
+                cx,
+                move |this, _, cx| {
+                    this.export_scale = option;
+                    cx.notify();
+                },
+            ));
+        }
+        let name = self.editor.doc.display_name(id);
+        self.section("Export", cx)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(formats)
+                    .when(format == ImageFormat::Png, |this| this.child(scales)),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("export-file")
+                            .small()
+                            .outline()
+                            .flex_1()
+                            .loading(busy)
+                            .label(format!("Export {name}"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let (format, scale) = (this.export_format, this.export_scale);
+                                match this.export_path(id, format, scale) {
+                                    Some(path) => this.start_image_export(
+                                        id,
+                                        format,
+                                        scale,
+                                        ExportTarget::File(path),
+                                        cx,
+                                    ),
+                                    None => gpui_kit::component::WindowExt::push_notification(
+                                        window,
+                                        gpui_kit::component::notification::Notification::warning(
+                                            "Save the design as a project to export files.",
+                                        ),
+                                        cx,
+                                    ),
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("export-copy")
+                            .small()
+                            .ghost()
+                            .icon(Icon::new(Lucide::Copy))
+                            .tooltip("Copy as PNG")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let scale = this.export_scale;
+                                this.start_image_export(
+                                    id,
+                                    ImageFormat::Png,
+                                    scale,
+                                    ExportTarget::Clipboard,
+                                    cx,
+                                );
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// Align and distribute buttons for the selection.
     fn render_align_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
@@ -2206,6 +2302,7 @@ impl Studio {
         if let Some(attrs) = self.render_attributes_section(id, cx) {
             panel = panel.child(attrs);
         }
+        panel = panel.child(self.render_export_section(id, cx));
         panel = panel.child(self.render_css_section(cx));
         div()
             .id("inspector-scroll")

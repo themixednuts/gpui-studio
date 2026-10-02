@@ -1,6 +1,7 @@
 //! The native Studio window, built on GPUI Kit.
 
 mod canvas;
+mod image_export;
 mod inspector;
 mod paint;
 mod panels;
@@ -87,7 +88,8 @@ mod actions {
             PlaceImage,
             CreateComponent,
             DetachInstance,
-            StartPresenting
+            StartPresenting,
+            ExportSelection
         ]
     );
 }
@@ -165,6 +167,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-alt-k", CreateComponent, c),
         KeyBinding::new("secondary-alt-b", DetachInstance, c),
         KeyBinding::new("secondary-alt-enter", StartPresenting, c),
+        KeyBinding::new("secondary-shift-e", ExportSelection, c),
         KeyBinding::new("alt-a", AlignLeft, c),
         KeyBinding::new("alt-h", AlignHCenter, c),
         KeyBinding::new("alt-d", AlignRight, c),
@@ -878,5 +881,68 @@ mod tests {
         .expect("exit");
         cx.run_until_parked();
         cx.update(|cx| assert!(studio.read(cx).present.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn exporting_an_artboard_writes_svg_and_png(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let project = dir.path().join("design");
+        let (handle, workspace, _) = boot(
+            cx,
+            LaunchConfig {
+                project: Some(project.clone()),
+                example: None,
+                state_path: Some(dir.path().join("workspace.ron")),
+                mcp: false,
+            },
+        );
+        let studio = cx.update(|cx| workspace.read(cx).tabs[0].clone());
+        for format in [
+            crate::export_image::ImageFormat::Svg,
+            crate::export_image::ImageFormat::Png,
+        ] {
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                studio.update(cx, |s, cx| {
+                    let board = s.editor.doc.pages[0].artboards[0].root;
+                    let path = s.export_path(board, format, 1.0).expect("project path");
+                    s.start_image_export(
+                        board,
+                        format,
+                        1.0,
+                        super::image_export::ExportTarget::File(path),
+                        cx,
+                    );
+                });
+            })
+            .expect("start export");
+            for _ in 0..6 {
+                cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                    .expect("frame");
+                cx.run_until_parked();
+            }
+            cx.update(|cx| {
+                eprintln!(
+                    "DEBUG job pending: {}",
+                    studio.read(cx).export_job.is_some()
+                )
+            });
+        }
+        let svg = std::fs::read_to_string(project.join("exports/landing-desktop.svg"))
+            .expect("svg written");
+        assert!(
+            svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1280\""),
+            "{svg}"
+        );
+        assert!(
+            svg.contains("fill=\"#ff5a36\""),
+            "the primary button is drawn"
+        );
+        let png = std::fs::read(project.join("exports/landing-desktop.png")).expect("png written");
+        assert_eq!(
+            crate::assets::image_size(&png, "png"),
+            Some((1280.0, 820.0))
+        );
+        cx.update(|cx| assert!(studio.read(cx).export_job.is_none()));
     }
 }

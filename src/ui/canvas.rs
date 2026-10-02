@@ -20,12 +20,12 @@ use super::{
     AlignBottom, AlignHCenter, AlignLeft, AlignRight, AlignTop, AlignVCenter, ArrowTool,
     BringForward, CANVAS_CONTEXT, CommentTool, ConnectorTool, CopySelection, CreateComponent,
     CutSelection, DeleteSelection, DetachInstance, DistributeHorizontal, DistributeVertical,
-    DuplicateSelection, EllipseTool, EnterSelection, EscapeSelection, FrameTool, GroupSelection,
-    HandTool, LineTool, NudgeDown, NudgeDownBig, NudgeLeft, NudgeLeftBig, NudgeRight,
-    NudgeRightBig, NudgeUp, NudgeUpBig, PasteClipboard, PencilTool, PlaceImage, RectangleTool,
-    RenameSelection, RightTab, SelectAllSiblings, SelectTool, SendBackward, StartPresenting,
-    Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked, UngroupSelection,
-    ZoomToSelection,
+    DuplicateSelection, EllipseTool, EnterSelection, EscapeSelection, ExportSelection, FrameTool,
+    GroupSelection, HandTool, LineTool, NudgeDown, NudgeDownBig, NudgeLeft, NudgeLeftBig,
+    NudgeRight, NudgeRightBig, NudgeUp, NudgeUpBig, PasteClipboard, PencilTool, PlaceImage,
+    RectangleTool, RenameSelection, RightTab, SelectAllSiblings, SelectTool, SendBackward,
+    StartPresenting, Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked,
+    UngroupSelection, ZoomToSelection,
 };
 use crate::editor::{ImagePlacement, InsertTarget, Tool};
 use crate::geometry::{Align, Axis, Edges, Guide, Rect, guides, snap};
@@ -2217,6 +2217,7 @@ impl Studio {
             )
         });
 
+        let export_stage = self.render_export_stage(window, cx);
         let pins = self.render_comment_pins(cx);
         let connection_labels = self.render_connection_labels(cx);
         let draft = self.render_comment_draft(cx);
@@ -2258,6 +2259,7 @@ impl Studio {
             editing,
             unsettled: std::cell::Cell::new(false),
             measured: &measured,
+            texts: None,
         };
         let mut artboards = Vec::new();
         let mut labels = Vec::new();
@@ -2762,6 +2764,20 @@ impl Studio {
             }))
             .on_action(cx.listener(|this, _: &PlaceImage, w, cx| this.prompt_place_image(w, cx)))
             .on_action(cx.listener(|this, _: &StartPresenting, w, cx| this.start_present(w, cx)))
+            .on_action(cx.listener(|this, _: &ExportSelection, _, cx| {
+                if let Some(id) = this.editor.primary() {
+                    let (format, scale) = (this.export_format, this.export_scale);
+                    if let Some(path) = this.export_path(id, format, scale) {
+                        this.start_image_export(
+                            id,
+                            format,
+                            scale,
+                            super::image_export::ExportTarget::File(path),
+                            cx,
+                        );
+                    }
+                }
+            }))
             .on_action(cx.listener(|this, _: &CreateComponent, window, cx| {
                 if let Some(id) = this.editor.primary() {
                     this.apply(window, cx, |e| e.create_component(id, None));
@@ -2797,6 +2813,7 @@ impl Studio {
             }))
             .child(probe)
             .children(artboards)
+            .children(export_stage)
             .children(labels)
             .child(overlay)
             .children(size_label)

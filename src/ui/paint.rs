@@ -114,6 +114,18 @@ pub(crate) struct Painter<'a> {
     pub unsettled: std::cell::Cell<bool>,
     /// Bounds from the previous frame (window coordinates).
     pub measured: &'a HashMap<NodeId, Bounds<Pixels>>,
+    /// When set, text layers record their laid-out text here (image export).
+    pub texts: Option<&'a RefCell<HashMap<NodeId, TextCapture>>>,
+}
+
+/// A text layer's GPUI layout, kept for image export.
+pub(crate) struct TextCapture {
+    /// The laid-out text (valid after prepaint).
+    pub layout: gpui_kit::TextLayout,
+    /// The text that was shaped.
+    pub text: String,
+    /// Inline style runs over `text`.
+    pub runs: Vec<(Range<usize>, HighlightStyle)>,
 }
 
 #[derive(Clone, Default)]
@@ -560,7 +572,18 @@ impl Painter<'_> {
             _ => {
                 if self.doc.is_text_layer(id) {
                     let (text, runs) = self.inline_runs(id, &inherited);
+                    let captured = self.texts.map(|_| (text.clone(), runs.clone()));
                     let text = StyledText::new(text).with_highlights(runs);
+                    if let (Some(texts), Some((source, runs))) = (self.texts, captured) {
+                        texts.borrow_mut().insert(
+                            id,
+                            TextCapture {
+                                layout: text.layout().clone(),
+                                text: source,
+                                runs,
+                            },
+                        );
+                    }
                     if self.editing == Some(id) {
                         // Keep the layout while the in-place editor covers it.
                         el = el.child(div().opacity(0.0).child(text));

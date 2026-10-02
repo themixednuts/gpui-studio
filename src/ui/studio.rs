@@ -72,6 +72,11 @@ pub(crate) struct Studio {
     pub(crate) panels: PanelLayout,
     /// Variable being edited in the Variables tab: (name, editing the value?, input).
     pub(crate) variable_edit: Option<(String, bool, Entity<InputState>)>,
+    /// Format and scale the Export section uses.
+    pub(crate) export_format: crate::export_image::ImageFormat,
+    pub(crate) export_scale: f32,
+    /// An image export waiting for its 1× layout.
+    pub(crate) export_job: Option<super::image_export::ExportJob>,
     /// A running presentation.
     pub(crate) present: Option<super::present::Present>,
     /// Pending drop target while dragging a row in the layer list.
@@ -123,6 +128,9 @@ impl Studio {
             panels: panels.clamped(),
             layer_drop: None,
             present: None,
+            export_job: None,
+            export_format: crate::export_image::ImageFormat::Png,
+            export_scale: 2.0,
             variable_edit: None,
             panel_drag: None,
             shown_status: String::new(),

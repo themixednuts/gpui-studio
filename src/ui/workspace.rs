@@ -353,6 +353,45 @@ impl Workspace {
                 "no project is open; use list_projects and switch_project".into(),
             )
         })?;
+        if name == "export_image" {
+            return studio.update(cx, |this, cx| {
+                #[derive(serde::Deserialize)]
+                struct A {
+                    node_id: String,
+                    format: Option<String>,
+                    scale: Option<f32>,
+                }
+                let a: A = serde_json::from_value(arguments)
+                    .map_err(|e| agent::AgentError::Invalid(e.to_string()))?;
+                let id = crate::model::NodeId::parse(&a.node_id)
+                    .filter(|id| this.editor.doc.contains(*id))
+                    .ok_or_else(|| agent::AgentError::Invalid(format!("no node {}", a.node_id)))?;
+                let format = match a.format.as_deref() {
+                    None => crate::export_image::ImageFormat::Png,
+                    Some(f) => crate::export_image::ImageFormat::parse(f).ok_or_else(|| {
+                        agent::AgentError::Invalid(format!("unknown format {f:?}"))
+                    })?,
+                };
+                let scale = a.scale.unwrap_or(2.0);
+                if !(0.1..=8.0).contains(&scale) {
+                    return Err(agent::AgentError::Invalid("scale must be 0.1..=8".into()));
+                }
+                let path = this.export_path(id, format, scale).ok_or_else(|| {
+                    agent::AgentError::Invalid("the design is not saved as a project".into())
+                })?;
+                this.start_image_export(
+                    id,
+                    format,
+                    scale,
+                    super::image_export::ExportTarget::File(path.clone()),
+                    cx,
+                );
+                Ok((
+                    serde_json::json!({ "path": path, "status": "exporting" }),
+                    None,
+                ))
+            });
+        }
         studio.update(cx, |this, cx| {
             let before = this.editor.selection.clone();
             this.editor.measured = this.canvas.measured();
