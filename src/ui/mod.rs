@@ -495,7 +495,7 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             assert!(view.read(cx).canvas.text_edit_target() == Some(heading));
-            window.press("ctrl-a", cx);
+            window.press("secondary-a", cx);
             window.input("Native design", cx);
             window.press("enter", cx);
         })
@@ -506,7 +506,7 @@ mod tests {
             let doc = &view.read(cx).editor.doc;
             assert_eq!(doc.text_content(heading).as_deref(), Some("Native design"));
             // Undo restores the text (focus returned to the canvas).
-            window.press("ctrl-z", cx);
+            window.press("secondary-z", cx);
         })
         .expect("commit");
         cx.run_until_parked();
