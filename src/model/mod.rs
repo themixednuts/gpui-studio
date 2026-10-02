@@ -7,7 +7,9 @@
 //! written back to disk as standalone HTML files, and exposed to MCP agents.
 
 pub mod color;
+pub mod connection;
 pub mod css;
+pub mod grid;
 pub mod html;
 pub mod style;
 
@@ -15,6 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub use color::Color;
+pub use connection::{ArrowHeads, Connection, ConnectorStyle, Endpoint};
 pub use style::{Computed, Length, Style};
 
 /// Stable identity of one node, persisted as `data-id="n42"`.
@@ -24,6 +27,20 @@ pub struct NodeId(pub u64);
 impl fmt::Display for NodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "n{}", self.0)
+    }
+}
+
+impl serde::Serialize for NodeId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for NodeId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid node id {text:?}")))
     }
 }
 
@@ -195,6 +212,20 @@ pub struct Page {
     pub name: String,
     /// Artboards in z-order (last is front-most).
     pub artboards: Vec<Artboard>,
+    /// Connectors drawn on this page's canvas.
+    pub connections: Vec<Connection>,
+}
+
+impl Page {
+    /// An empty page.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            artboards: Vec::new(),
+            connections: Vec::new(),
+        }
+    }
 }
 
 /// Errors from structural edits.
@@ -221,6 +252,7 @@ pub struct Document {
     /// Pages in order.
     pub pages: Vec<Page>,
     next_id: u64,
+    next_connection: u64,
 }
 
 impl Document {
@@ -229,11 +261,9 @@ impl Document {
     pub fn new() -> Self {
         Self {
             nodes: BTreeMap::new(),
-            pages: vec![Page {
-                name: "Page 1".to_owned(),
-                artboards: Vec::new(),
-            }],
+            pages: vec![Page::new("Page 1")],
             next_id: 1,
+            next_connection: 1,
         }
     }
 
@@ -546,10 +576,86 @@ impl Document {
         if let Some((page, index)) = self.artboard_index(id) {
             self.pages[page].artboards.remove(index);
         }
-        for node in self.descendants(id) {
+        let removed = self.descendants(id);
+        for page in &mut self.pages {
+            page.connections
+                .retain(|c| !removed.iter().any(|node| c.touches(*node)));
+        }
+        for node in removed {
             self.nodes.remove(&node);
         }
         Ok(())
+    }
+
+    /// Add a connection on a page. Returns its id.
+    pub fn add_connection(
+        &mut self,
+        page: usize,
+        from: Endpoint,
+        to: Endpoint,
+    ) -> Result<u64, EditError> {
+        for end in [from, to] {
+            if let Some(node) = end.node()
+                && !self.contains(node)
+            {
+                return Err(EditError::Missing(node));
+            }
+        }
+        let id = self.next_connection_id();
+        let page = page.min(self.pages.len().saturating_sub(1));
+        if let Some(page) = self.pages.get_mut(page) {
+            page.connections.push(Connection::new(id, from, to));
+        }
+        Ok(id)
+    }
+
+    fn next_connection_id(&mut self) -> u64 {
+        let used = self
+            .pages
+            .iter()
+            .flat_map(|p| &p.connections)
+            .map(|c| c.id + 1)
+            .max()
+            .unwrap_or(1);
+        self.next_connection = self.next_connection.max(used);
+        let id = self.next_connection;
+        self.next_connection += 1;
+        id
+    }
+
+    /// Find a connection: `(page, index)`.
+    #[must_use]
+    pub fn connection_index(&self, id: u64) -> Option<(usize, usize)> {
+        self.pages.iter().enumerate().find_map(|(page, p)| {
+            p.connections
+                .iter()
+                .position(|c| c.id == id)
+                .map(|index| (page, index))
+        })
+    }
+
+    /// Lookup a connection.
+    #[must_use]
+    pub fn connection(&self, id: u64) -> Option<&Connection> {
+        let (page, index) = self.connection_index(id)?;
+        self.pages.get(page)?.connections.get(index)
+    }
+
+    /// Mutable lookup.
+    pub fn connection_mut(&mut self, id: u64) -> Option<&mut Connection> {
+        let (page, index) = self.connection_index(id)?;
+        self.pages.get_mut(page)?.connections.get_mut(index)
+    }
+
+    /// Remove a connection; returns whether it existed.
+    pub fn remove_connection(&mut self, id: u64) -> bool {
+        match self.connection_index(id) {
+            Some((page, index)) => {
+                self.pages[page].connections.remove(index);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Move a node to a new parent position.
@@ -636,10 +742,7 @@ impl Document {
         let file = self.unique_artboard_file(&self.display_name(root));
         let page = page.min(self.pages.len().saturating_sub(1));
         if self.pages.is_empty() {
-            self.pages.push(Page {
-                name: "Page 1".to_owned(),
-                artboards: Vec::new(),
-            });
+            self.pages.push(Page::new("Page 1"));
         }
         self.detach(root);
         self.pages[page]
@@ -771,6 +874,30 @@ mod tests {
             doc.is_text_layer(roots[2]),
             "a flex box with only text is still a text layer"
         );
+    }
+
+    #[test]
+    fn connections_follow_node_lifetimes() {
+        let (mut doc, board, a, b) = sample();
+        let c1 = doc
+            .add_connection(0, Endpoint::Node(a), Endpoint::Node(b))
+            .unwrap();
+        let c2 = doc
+            .add_connection(0, Endpoint::Point { x: 0.0, y: 0.0 }, Endpoint::Node(board))
+            .unwrap();
+        assert_ne!(c1, c2);
+        assert_eq!(
+            doc.add_connection(0, Endpoint::Node(NodeId(999)), Endpoint::Node(a)),
+            Err(EditError::Missing(NodeId(999)))
+        );
+        doc.remove(b).unwrap();
+        assert!(
+            doc.connection(c1).is_none(),
+            "removing a layer drops its connectors"
+        );
+        assert!(doc.connection(c2).is_some());
+        assert!(doc.remove_connection(c2));
+        assert!(!doc.remove_connection(c2));
     }
 
     #[test]

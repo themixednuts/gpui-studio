@@ -187,7 +187,6 @@ const DESKTOP: &str = r##"<!doctype html><html><head><title>Landing — Desktop<
     <button style="border: none; padding: 9px 16px; background-color: #17181c; color: #ffffff; border-radius: 999px; font-size: 14px; font-weight: 600">Sign in</button>
   </header>
   <section data-name="Hero" style="display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 72px 56px 40px 56px">
-    <span style="padding: 5px 12px; background-color: #ffe9e2; color: #c2410c; border-radius: 999px; font-size: 13px; font-weight: 600">New · Agents can edit your designs</span>
     <h1 style="margin: 0; width: 820px; font-size: 64px; line-height: 70px; font-weight: 700; text-align: center">Design in real HTML. Ship it as native GPUI.</h1>
     <p style="margin: 0; width: 600px; font-size: 19px; line-height: 29px; color: #5b5e66; text-align: center">Every layer on this canvas is an HTML element with inline CSS, so what you draw is exactly what your app renders.</p>
     <div data-name="Actions" style="display: flex; gap: 12px; padding-top: 8px"><button style="border: none; padding: 13px 22px; background-color: #ff5a36; color: #ffffff; border-radius: 12px; font-size: 16px; font-weight: 600">Start designing</button><button style="padding: 13px 22px; background-color: #ffffff; border: 1px solid #e3e1db; border-radius: 12px; font-size: 16px; font-weight: 600">Read the docs</button></div>

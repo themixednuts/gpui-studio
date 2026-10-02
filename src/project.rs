@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
 use crate::model::html::{ImportOptions, artboard_document, parse_document};
-use crate::model::{Artboard, Document, NodeId, Page};
+use crate::model::{Artboard, Connection, Document, NodeId, Page};
 
 const MANIFEST: &str = "studio.ron";
 const ARTBOARDS: &str = "artboards";
@@ -41,6 +41,8 @@ struct Manifest {
 struct ManifestPage {
     name: String,
     artboards: Vec<ManifestArtboard>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    connections: Vec<Connection>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,13 +185,30 @@ impl Project {
             doc.pages.push(Page {
                 name: page.name,
                 artboards,
+                connections: page.connections,
             });
         }
+        // Drop connectors whose layers no longer exist (edited elsewhere).
+        let live: Vec<Vec<bool>> = doc
+            .pages
+            .iter()
+            .map(|p| {
+                p.connections
+                    .iter()
+                    .map(|c| {
+                        [c.from, c.to]
+                            .iter()
+                            .all(|e| e.node().is_none_or(|n| doc.contains(n)))
+                    })
+                    .collect()
+            })
+            .collect();
+        for (page, keep) in doc.pages.iter_mut().zip(live) {
+            let mut keep = keep.into_iter();
+            page.connections.retain(|_| keep.next().unwrap_or(false));
+        }
         if doc.pages.is_empty() {
-            doc.pages.push(Page {
-                name: "Page 1".to_owned(),
-                artboards: Vec::new(),
-            });
+            doc.pages.push(Page::new("Page 1"));
         }
         Ok(doc)
     }
@@ -203,6 +222,7 @@ impl Project {
                 .iter()
                 .map(|page| ManifestPage {
                     name: page.name.clone(),
+                    connections: page.connections.clone(),
                     artboards: page
                         .artboards
                         .iter()
@@ -372,6 +392,19 @@ mod tests {
         assert_eq!(root, first.root, "persisted ids survive external edits");
         assert!(doc.text_content(root).unwrap().contains("Edited on disk"));
         assert_eq!(doc.pages[0].artboards[0].x, first.x);
+
+        // Connectors persist in the manifest.
+        let mobile = doc.pages[0].artboards[1].root;
+        let connection = doc
+            .add_connection(
+                0,
+                crate::model::Endpoint::Node(root),
+                crate::model::Endpoint::Node(mobile),
+            )
+            .unwrap();
+        project.save(&doc).unwrap();
+        let (_, reopened) = Project::open(dir.path()).unwrap();
+        assert_eq!(reopened.connection(connection), doc.connection(connection));
 
         // Deleting an artboard removes its file.
         let file = doc.pages[0].artboards[0].file.clone();

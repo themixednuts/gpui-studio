@@ -8,7 +8,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
@@ -55,10 +55,12 @@ pub(super) enum Field {
     Src,
     Href,
     Css,
+    ConnectionLabel,
+    ConnectionColor,
 }
 
 impl Field {
-    const ALL: [Self; 27] = [
+    const ALL: [Self; 29] = [
         Self::Name,
         Self::X,
         Self::Y,
@@ -86,11 +88,13 @@ impl Field {
         Self::Src,
         Self::Href,
         Self::Css,
+        Self::ConnectionLabel,
+        Self::ConnectionColor,
     ];
 }
 
 /// Revision, selection, and measured sizes the inputs last showed.
-type SyncKey = (u64, Vec<NodeId>, Vec<(i32, i32)>);
+type SyncKey = (u64, Vec<NodeId>, Vec<(i32, i32)>, Option<u64>);
 
 /// Inspector input state.
 pub(crate) struct Inspector {
@@ -238,6 +242,26 @@ impl Studio {
             Field::Radius => px_text(c.radius[0]),
             Field::Opacity => px_text((c.opacity * 100.0).round()),
             Field::Fill => hex(c.background),
+            Field::Stroke | Field::StrokeWidth
+                if matches!(node.map(|n| &n.kind), Some(NodeKind::Svg(_))) =>
+            {
+                let Some(NodeKind::Svg(source)) = node.map(|n| &n.kind) else {
+                    return String::new();
+                };
+                let stroke = crate::shapes::svg_stroke(source);
+                match field {
+                    Field::Stroke => stroke.map(|s| s.color).unwrap_or_default(),
+                    _ => stroke.map(|s| px_text(s.width)).unwrap_or_default(),
+                }
+            }
+            Field::ConnectionLabel | Field::ConnectionColor => {
+                let connection = self.selected_connection.and_then(|c| doc.connection(c));
+                match (field, connection) {
+                    (Field::ConnectionLabel, Some(c)) => c.label.clone(),
+                    (_, Some(c)) => c.color.clone(),
+                    _ => String::new(),
+                }
+            }
             Field::Stroke => hex(c.border_color),
             Field::StrokeWidth => {
                 let has_border = c
@@ -287,14 +311,35 @@ impl Studio {
             .filter_map(|id| self.canvas.doc_bounds(*id))
             .map(|b| (b.size.width.round() as i32, b.size.height.round() as i32))
             .collect();
-        let key = (self.editor.revision, selection.clone(), sizes);
+        let key = (
+            self.editor.revision,
+            selection.clone(),
+            sizes,
+            self.selected_connection,
+        );
         if self.inspector.synced.as_ref() == Some(&key) {
             return;
         }
         self.inspector.synced = Some(key);
+        if self.selected_connection.is_some() {
+            for field in [Field::ConnectionLabel, Field::ConnectionColor] {
+                let input = self.inspector.input(field);
+                if input.read(cx).focus_handle(cx).is_focused(window) {
+                    continue;
+                }
+                let value = self.field_value(field, NodeId(0));
+                if input.read(cx).value().as_ref() != value {
+                    input.update(cx, |state, cx| state.set_value(value, window, cx));
+                }
+            }
+        }
         let Some(id) = selection.first().copied() else {
             return;
         };
+        let display_name = self.editor.doc.display_name(id);
+        self.inspector.input(Field::Name).update(cx, |state, cx| {
+            state.set_placeholder(display_name, window, cx)
+        });
         for field in Field::ALL {
             let input = self.inspector.input(field);
             if input.read(cx).focus_handle(cx).is_focused(window) {
@@ -337,10 +382,58 @@ impl Studio {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let (Field::ConnectionLabel | Field::ConnectionColor, Some(connection)) =
+            (field, self.selected_connection)
+        {
+            let key = format!("field-{field:?}-c{connection}");
+            let result = if field == Field::ConnectionLabel {
+                self.editor
+                    .update_connection(connection, Some(value), None, None, None, Some(&key))
+            } else if Color::parse_loose(value).is_some() {
+                self.editor
+                    .update_connection(connection, None, Some(value), None, None, Some(&key))
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                self.editor.status = format!("{error:#}");
+            }
+            cx.notify();
+            return;
+        }
         let Some(id) = self.editor.primary() else {
             return;
         };
         let key = format!("field-{field:?}-{id}");
+        if matches!(field, Field::Stroke | Field::StrokeWidth)
+            && matches!(
+                self.editor.doc.get(id).map(|n| &n.kind),
+                Some(NodeKind::Svg(_))
+            )
+        {
+            let ids = self.editor.selection.clone();
+            let result = if field == Field::Stroke {
+                match Color::parse_loose(value) {
+                    Some(_) => self
+                        .editor
+                        .set_vector_stroke(&ids, Some(value), None, Some(&key)),
+                    None => Ok(()),
+                }
+            } else {
+                match parse_number(value) {
+                    Some(width) => {
+                        self.editor
+                            .set_vector_stroke(&ids, None, Some(width), Some(&key))
+                    }
+                    None => Ok(()),
+                }
+            };
+            if let Err(error) = result {
+                self.editor.status = format!("{error:#}");
+            }
+            cx.notify();
+            return;
+        }
         let number = parse_number(value);
         let px_value = |n: f32| Some(format!("{}px", fmt_num(n)));
         match field {
@@ -519,6 +612,7 @@ impl Studio {
             Field::Css => {
                 let _ = self.editor.set_style_text(id, value, Some(&key));
             }
+            Field::ConnectionLabel | Field::ConnectionColor => {}
         }
         cx.notify();
     }
@@ -529,59 +623,136 @@ impl Studio {
         let theme = cx.theme().clone();
         v_flex()
             .px_3()
-            .py_2p5()
+            .pt_2p5()
+            .pb_3()
             .gap_2()
             .border_b_1()
             .border_color(theme.border)
             .child(
-                div()
+                h_flex()
+                    .h(px(20.0))
                     .text_xs()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title.to_owned()),
             )
     }
 
-    fn labeled(&self, label: &'static str, field: Field, cx: &Context<Self>) -> AnyElement {
+    /// A section whose header carries one add/remove style action.
+    fn section_action(
+        &self,
+        title: &str,
+        present: bool,
+        tooltip: &'static str,
+        cx: &mut Context<Self>,
+        on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> gpui_kit::Div {
+        let theme = cx.theme().clone();
+        let id: SharedString = format!("section-action-{title}").into();
+        v_flex()
+            .px_3()
+            .pt_2p5()
+            .pb(px(if present { 12.0 } else { 6.0 }))
+            .gap_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .h(px(20.0))
+                    .justify_between()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .when(!present, |this| this.text_color(theme.muted_foreground))
+                    .child(title.to_owned())
+                    .child(
+                        Button::new(id)
+                            .icon(Icon::new(if present {
+                                Lucide::Minus
+                            } else {
+                                Lucide::Plus
+                            }))
+                            .ghost()
+                            .xsmall()
+                            .tooltip(tooltip)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                on(this, window, cx);
+                                this.inspector.invalidate();
+                                cx.notify();
+                            })),
+                    ),
+            )
+    }
+
+    /// Background of fields and segmented controls.
+    fn field_fill(cx: &Context<Self>) -> gpui_kit::Hsla {
+        let theme = cx.theme();
+        if theme.is_dark() {
+            theme.secondary
+        } else {
+            gpui_kit::rgb(0xf3f3f1).into()
+        }
+    }
+
+    /// A filled field with an inline label, Paper style.
+    fn field_box(
+        &self,
+        label: impl IntoElement,
+        field: Field,
+        cx: &Context<Self>,
+    ) -> gpui_kit::Div {
         let theme = cx.theme().clone();
         h_flex()
             .flex_1()
             .min_w_0()
+            .h(px(28.0))
+            .pl_2()
             .gap_1()
+            .rounded(px(6.0))
+            .bg(Self::field_fill(cx))
+            .border_1()
+            .border_color(theme.transparent)
+            .hover(|this| this.border_color(theme.border))
             .child(
                 div()
-                    .w(px(16.0))
+                    .flex_shrink_0()
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(label),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(Input::new(&self.inspector.input(field)).xsmall()),
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.inspector.input(field))
+                        .xsmall()
+                        .appearance(false),
+                ),
             )
-            .into_any_element()
+    }
+
+    fn labeled(&self, label: &'static str, field: Field, cx: &Context<Self>) -> AnyElement {
+        self.field_box(label, field, cx).into_any_element()
     }
 
     fn color_row(&self, field: Field, color: Option<Color>, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        self.field_box(
+            div()
+                .size(px(14.0))
+                .rounded(px(3.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(color.map_or(gpui_kit::transparent_black(), hsla)),
+            field,
+            cx,
+        )
+        .into_any_element()
+    }
+
+    /// Container for a row of segmented options.
+    fn segment_group(&self, cx: &Context<Self>) -> gpui_kit::Div {
         h_flex()
-            .gap_2()
-            .child(
-                div()
-                    .size(px(20.0))
-                    .flex_shrink_0()
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(color.map_or(gpui_kit::transparent_black(), hsla)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .child(Input::new(&self.inspector.input(field)).xsmall()),
-            )
-            .into_any_element()
+            .gap_0p5()
+            .p_0p5()
+            .rounded(px(7.0))
+            .bg(Self::field_fill(cx))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -594,22 +765,42 @@ impl Studio {
         tooltip: &'static str,
         cx: &mut Context<Self>,
         on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) -> Button {
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        let theme = cx.theme().clone();
         let id: SharedString = id.into();
-        let mut button = Button::new(id)
-            .ghost()
-            .xsmall()
-            .selected(selected)
-            .tooltip(tooltip);
-        button = match icon {
-            Some(icon) => button.icon(Icon::new(icon)),
-            None => button.label(label),
-        };
-        button.on_click(cx.listener(move |this, _, window, cx| {
-            on(this, window, cx);
-            this.inspector.invalidate();
-            cx.notify();
-        }))
+        let label: SharedString = label.into();
+        div()
+            .id(id)
+            .h(px(22.0))
+            .px_2()
+            .flex()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.0))
+            .text_xs()
+            .cursor_pointer()
+            .when(selected, |this| {
+                this.bg(theme.background)
+                    .shadow_xs()
+                    .text_color(theme.foreground)
+            })
+            .when(!selected, |this| {
+                this.text_color(theme.muted_foreground)
+                    .hover(|s| s.text_color(theme.foreground))
+            })
+            .child(match icon {
+                Some(icon) => Icon::new(icon).xsmall().into_any_element(),
+                None => div().whitespace_nowrap().child(label).into_any_element(),
+            })
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                on(this, window, cx);
+                this.inspector.invalidate();
+                cx.notify();
+            }))
     }
 
     fn set(
@@ -647,11 +838,7 @@ impl Studio {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(Input::new(&self.inspector.input(Field::Name)).xsmall()),
-                    )
+                    .child(self.field_box("", Field::Name, cx))
                     .child(
                         Button::new("tag-menu")
                             .xsmall()
@@ -755,14 +942,27 @@ impl Studio {
                     }
                 }
             };
-            let width_mode = mode(c.width, parent_row);
+            // An auto width in block flow or a stretching column already fills.
+            let stretches = parent.as_ref().is_some_and(|p| {
+                p.display == Display::Block
+                    || (p.display == Display::Flex
+                        && p.direction.is_column()
+                        && matches!(p.align_items, Align::Normal | Align::Stretch))
+            });
+            let width_mode = match mode(c.width, parent_row) {
+                "Hug"
+                    if stretches
+                        && c.align_self == Align::Normal
+                        && !self.editor.doc.is_inline_subtree(id) =>
+                {
+                    "Fill"
+                }
+                other => other,
+            };
             let height_mode = mode(c.height, parent_col);
-            let mut row = h_flex().gap_1();
+            let mut row = v_flex().gap_1p5();
             for (axis, current) in [("W", width_mode), ("H", height_mode)] {
-                let mut group = h_flex()
-                    .flex_1()
-                    .gap_0p5()
-                    .child(div().w(px(16.0)).text_xs().child(axis));
+                let mut group = self.segment_group(cx).flex_1();
                 for option in ["Fixed", "Hug", "Fill"] {
                     let is_width = axis == "W";
                     group = group.child(self.segment(
@@ -813,11 +1013,21 @@ impl Studio {
                         },
                     ));
                 }
-                row = row.child(group);
+                row = row.child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(14.0))
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(axis),
+                        )
+                        .child(group),
+                );
             }
             section = section.child(row).child(
-                h_flex()
-                    .gap_1()
+                self.segment_group(cx)
                     .child(self.segment(
                         "pos-flow",
                         "In flow",
@@ -888,7 +1098,7 @@ impl Studio {
                     .child(self.labeled("R", Field::Radius, cx))
                     .child(self.labeled("%", Field::Opacity, cx)),
             )
-            .child(h_flex().gap_1().child(self.segment(
+            .child(self.segment_group(cx).child(self.segment(
                 "clip",
                 "Clip content",
                 None,
@@ -913,8 +1123,7 @@ impl Studio {
     fn render_layout_section(&self, c: &Computed, cx: &mut Context<Self>) -> AnyElement {
         let display = c.display;
         let mut section = self.section("Layout", cx).child(
-            h_flex()
-                .gap_1()
+            self.segment_group(cx)
                 .child(self.segment(
                     "display-block",
                     "Stack",
@@ -971,8 +1180,7 @@ impl Studio {
         if display == Display::Flex {
             let column = c.direction.is_column();
             section = section.child(
-                h_flex()
-                    .gap_1()
+                self.segment_group(cx)
                     .child(self.segment(
                         "dir-row",
                         "",
@@ -1128,61 +1336,123 @@ impl Studio {
 
     fn render_fill_section(&self, c: &Computed, cx: &mut Context<Self>) -> AnyElement {
         let has_fill = c.background.is_some_and(|b| b.a > 0);
-        self.section("Fill", cx)
-            .child(self.color_row(Field::Fill, c.background, cx))
-            .child(h_flex().gap_1().child(self.segment(
-                "fill-toggle",
-                if has_fill { "Remove fill" } else { "Add fill" },
-                None,
-                false,
-                "background-color",
-                cx,
-                move |this, window, cx| {
+        let mut section = self.section_action(
+            "Fill",
+            has_fill,
+            if has_fill { "Remove fill" } else { "Add fill" },
+            cx,
+            move |this, window, cx| {
+                this.set(
+                    vec![(
+                        "background-color",
+                        if has_fill { None } else { Some("#ffffff") },
+                    )],
+                    window,
+                    cx,
+                );
+            },
+        );
+        if has_fill {
+            section = section.child(self.color_row(Field::Fill, c.background, cx));
+        }
+        section.into_any_element()
+    }
+
+    fn render_stroke_section(
+        &self,
+        id: NodeId,
+        c: &Computed,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_vector = matches!(
+            self.editor.doc.get(id).map(|n| &n.kind),
+            Some(NodeKind::Svg(_))
+        );
+        if is_vector {
+            // Vector layers carry their stroke on the SVG itself.
+            let color = match self.editor.doc.get(id).map(|n| &n.kind) {
+                Some(NodeKind::Svg(source)) => {
+                    crate::shapes::svg_stroke(source).and_then(|s| Color::parse(&s.color))
+                }
+                _ => None,
+            };
+            return self
+                .section("Stroke", cx)
+                .child(self.color_row(Field::Stroke, color, cx))
+                .child(self.labeled("W", Field::StrokeWidth, cx))
+                .into_any_element();
+        }
+        let has_border = c
+            .border_style
+            .as_deref()
+            .is_some_and(|s| !matches!(s, "none" | "hidden"));
+        let dashed = matches!(c.border_style.as_deref(), Some("dashed" | "dotted"));
+        let mut section = self.section_action(
+            "Stroke",
+            has_border,
+            if has_border {
+                "Remove stroke"
+            } else {
+                "Add stroke"
+            },
+            cx,
+            move |this, window, cx| {
+                if has_border {
                     this.set(
-                        vec![(
-                            "background-color",
-                            if has_fill { None } else { Some("#ffffff") },
-                        )],
+                        vec![
+                            ("border", None),
+                            ("border-style", None),
+                            ("border-width", None),
+                            ("border-color", None),
+                        ],
                         window,
                         cx,
                     );
-                },
-            )))
-            .into_any_element()
-    }
-
-    fn render_stroke_section(&self, c: &Computed, cx: &mut Context<Self>) -> AnyElement {
-        let dashed = matches!(c.border_style.as_deref(), Some("dashed" | "dotted"));
-        self.section("Stroke", cx)
-            .child(self.color_row(Field::Stroke, c.border_color, cx))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(self.labeled("W", Field::StrokeWidth, cx))
-                    .child(self.segment(
-                        "stroke-solid",
-                        "Solid",
-                        None,
-                        !dashed,
-                        "Solid stroke",
-                        cx,
-                        |this, window, cx| {
-                            this.set(vec![("border-style", Some("solid"))], window, cx);
-                        },
-                    ))
-                    .child(self.segment(
-                        "stroke-dashed",
-                        "Dashed",
-                        None,
-                        dashed,
-                        "Dashed stroke",
-                        cx,
-                        |this, window, cx| {
-                            this.set(vec![("border-style", Some("dashed"))], window, cx);
-                        },
-                    )),
-            )
-            .into_any_element()
+                } else {
+                    this.set(vec![("border", Some("1px solid #d4d4d4"))], window, cx);
+                }
+            },
+        );
+        if has_border {
+            section = section
+                .child(self.color_row(Field::Stroke, c.border_color, cx))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(self.labeled("W", Field::StrokeWidth, cx))
+                        .child(
+                            self.segment_group(cx)
+                                .flex_1()
+                                .child(self.segment(
+                                    "stroke-solid",
+                                    "Solid",
+                                    None,
+                                    !dashed,
+                                    "Solid stroke",
+                                    cx,
+                                    |this, window, cx| {
+                                        this.set(vec![("border-style", Some("solid"))], window, cx);
+                                    },
+                                ))
+                                .child(self.segment(
+                                    "stroke-dashed",
+                                    "Dashed",
+                                    None,
+                                    dashed,
+                                    "Dashed stroke",
+                                    cx,
+                                    |this, window, cx| {
+                                        this.set(
+                                            vec![("border-style", Some("dashed"))],
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                        ),
+                );
+        }
+        section.into_any_element()
     }
 
     fn render_text_section(&self, id: NodeId, c: &Computed, cx: &mut Context<Self>) -> AnyElement {
@@ -1292,8 +1562,7 @@ impl Studio {
             )
             .child(self.color_row(Field::TextColor, c.color, cx))
             .child(
-                h_flex()
-                    .gap_1()
+                self.segment_group(cx)
                     .child(self.segment(
                         "align-left",
                         "",
@@ -1397,36 +1666,32 @@ impl Studio {
 
     fn render_effects_section(&self, c: &Computed, cx: &mut Context<Self>) -> AnyElement {
         let has_shadow = !c.shadows.is_empty();
-        let mut section = self
-            .section("Shadow", cx)
-            .child(h_flex().gap_1().child(self.segment(
-                "shadow-toggle",
-                if has_shadow {
-                    "Remove shadow"
-                } else {
-                    "Add drop shadow"
-                },
-                None,
-                false,
-                "box-shadow",
-                cx,
-                move |this, window, cx| {
-                    let value = Shadow {
-                        x: 0.0,
-                        y: 4.0,
-                        blur: 12.0,
-                        spread: 0.0,
-                        color: Color::rgba(0, 0, 0, 40),
-                        inset: false,
-                    }
-                    .to_css();
-                    this.set(
-                        vec![("box-shadow", if has_shadow { None } else { Some(&value) })],
-                        window,
-                        cx,
-                    );
-                },
-            )));
+        let mut section = self.section_action(
+            "Shadow",
+            has_shadow,
+            if has_shadow {
+                "Remove shadow"
+            } else {
+                "Add drop shadow"
+            },
+            cx,
+            move |this, window, cx| {
+                let value = Shadow {
+                    x: 0.0,
+                    y: 4.0,
+                    blur: 12.0,
+                    spread: 0.0,
+                    color: Color::rgba(0, 0, 0, 40),
+                    inset: false,
+                }
+                .to_css();
+                this.set(
+                    vec![("box-shadow", if has_shadow { None } else { Some(&value) })],
+                    window,
+                    cx,
+                );
+            },
+        );
         if has_shadow {
             section = section
                 .child(
@@ -1438,8 +1703,8 @@ impl Studio {
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(self.labeled("B", Field::ShadowBlur, cx))
-                        .child(self.labeled("S", Field::ShadowSpread, cx)),
+                        .child(self.labeled("Blur", Field::ShadowBlur, cx))
+                        .child(self.labeled("Spread", Field::ShadowSpread, cx)),
                 )
                 .child(self.color_row(Field::ShadowColor, c.shadows.first().map(|s| s.color), cx));
         }
@@ -1467,13 +1732,97 @@ impl Studio {
 
     fn render_css_section(&self, cx: &mut Context<Self>) -> AnyElement {
         self.section("CSS", cx)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Inline style of this layer. Any CSS property can be edited here."),
-            )
             .child(Input::new(&self.inspector.input(Field::Css)).xsmall())
+            .into_any_element()
+    }
+
+    fn render_connection_panel(
+        &self,
+        connection: &crate::model::Connection,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::model::{ArrowHeads, ConnectorStyle};
+        let id = connection.id;
+        let color = Color::parse_loose(&connection.color);
+        let mut style_row = self.segment_group(cx);
+        for style in ConnectorStyle::ALL {
+            style_row = style_row.child(self.segment(
+                format!("connector-style-{}", style.label()),
+                style.label(),
+                None,
+                connection.style == style,
+                "Routing",
+                cx,
+                move |this, window, cx| {
+                    this.apply(window, cx, |e| {
+                        e.update_connection(id, None, None, Some(style), None, None)
+                    });
+                },
+            ));
+        }
+        let mut heads_row = self.segment_group(cx);
+        for heads in ArrowHeads::ALL {
+            heads_row = heads_row.child(self.segment(
+                format!("connector-heads-{}", heads.label()),
+                heads.label(),
+                None,
+                connection.heads == heads,
+                "Arrowheads",
+                cx,
+                move |this, window, cx| {
+                    this.apply(window, cx, |e| {
+                        e.update_connection(id, None, None, None, Some(heads), None)
+                    });
+                },
+            ));
+        }
+        let describe = |end: crate::model::Endpoint| match end {
+            crate::model::Endpoint::Node(node) => self.editor.doc.display_name(node),
+            crate::model::Endpoint::Point { .. } => "Canvas point".to_owned(),
+        };
+        v_flex()
+            .child(
+                self.section("Connector", cx)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!(
+                                "{} → {}",
+                                describe(connection.from),
+                                describe(connection.to)
+                            )),
+                    )
+                    .child(
+                        Input::new(&self.inspector.input(Field::ConnectionLabel))
+                            .xsmall()
+                            .prefix(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Label"),
+                            ),
+                    ),
+            )
+            .child(self.section("Line", cx).child(style_row).child(heads_row))
+            .child(self.section("Color", cx).child(self.color_row(
+                Field::ConnectionColor,
+                color,
+                cx,
+            )))
+            .child(
+                v_flex().p_3().child(
+                    Button::new("delete-connection")
+                        .xsmall()
+                        .ghost()
+                        .icon(Icon::new(Lucide::Trash))
+                        .label("Delete connector")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.selected_connection = None;
+                            this.apply(window, cx, |e| e.delete_connection(id));
+                        })),
+                ),
+            )
             .into_any_element()
     }
 
@@ -1484,36 +1833,28 @@ impl Studio {
     ) -> AnyElement {
         let _ = window;
         let theme = cx.theme().clone();
+        if let Some(connection) = self
+            .selected_connection
+            .and_then(|c| self.editor.doc.connection(c).cloned())
+        {
+            return self.render_connection_panel(&connection, cx);
+        }
         let Some(id) = self.editor.primary() else {
             let page = self.editor.doc.pages.get(self.editor.page);
-            let count = page.map_or(0, |p| p.artboards.len());
-            return v_flex()
-                .p_4()
-                .gap_3()
-                .text_color(theme.muted_foreground)
+            return self
+                .section("Page", cx)
+                .child(div().child(page.map_or_else(String::new, |p| p.name.clone())))
                 .child(
                     div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.foreground)
-                        .child(page.map_or_else(String::new, |p| p.name.clone())),
-                )
-                .child(format!(
-                    "{count} artboard(s). Select a layer to edit its design."
-                ))
-                .child(
-                    v_flex()
-                        .gap_1()
                         .text_xs()
-                        .child("V select · F frame · R rectangle · T text · C comment")
-                        .child("Space-drag or middle-drag to pan · Ctrl/⌘ + scroll to zoom")
-                        .child("Shift+A auto layout · ⌘G group · ⌘D duplicate")
-                        .child("Paste HTML anywhere to import it as layers"),
+                        .text_color(theme.muted_foreground)
+                        .child(format!(
+                            "{} artboards",
+                            page.map_or(0, |p| p.artboards.len())
+                        )),
                 )
                 .into_any_element();
         };
-        if self.editor.selection.len() > 1 {
-            // Multi-selection edits apply to every selected layer.
-        }
         let c = self.computed(id);
         let is_text = self.editor.doc.is_text_layer(id);
         let is_svg = matches!(
@@ -1529,7 +1870,7 @@ impl Studio {
         }
         panel = panel
             .child(self.render_fill_section(&c, cx))
-            .child(self.render_stroke_section(&c, cx));
+            .child(self.render_stroke_section(id, &c, cx));
         if !is_svg {
             panel = panel.child(self.render_text_section(id, &c, cx));
         }

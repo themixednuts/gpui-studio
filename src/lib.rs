@@ -14,4 +14,6 @@ pub mod history;
 pub mod model;
 pub mod presets;
 pub mod project;
+pub mod shapes;
 pub mod ui;
+pub mod workspace;

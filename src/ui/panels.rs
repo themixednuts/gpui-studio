@@ -20,9 +20,6 @@ use crate::model::style::Display;
 use crate::model::{NodeId, NodeKind};
 use crate::presets::{ARTBOARD_PRESETS, COMPONENTS};
 
-const LEFT_WIDTH: f32 = 248.0;
-const RIGHT_WIDTH: f32 = 284.0;
-
 struct LayerRow {
     id: NodeId,
     depth: usize,
@@ -273,7 +270,7 @@ impl Studio {
                 .child("No layers on this page yet. Press F to draw a frame.")
                 .into_any_element();
         }
-        let mut list = v_flex().py_1();
+        let mut list = v_flex().py_1().gap_px();
         for row in rows {
             let id = row.id;
             let node = self.editor.doc.get(id);
@@ -293,8 +290,10 @@ impl Studio {
                 h_flex()
                     .id(SharedString::from(format!("layer-row-{id}")))
                     .group(group.clone())
-                    .h(px(28.0))
-                    .pl(px(8.0 + row.depth as f32 * 14.0))
+                    .h(px(26.0))
+                    .mx_1p5()
+                    .rounded(px(6.0))
+                    .pl(px(4.0 + row.depth as f32 * 12.0))
                     .pr_1()
                     .gap_1()
                     .when(selected, |this| this.bg(theme.primary.opacity(0.14)))
@@ -474,20 +473,12 @@ impl Studio {
             )
             .child(presets)
             .child(
-                h_flex()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Components"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child("Inserted as editable HTML"),
-                    ),
+                h_flex().justify_between().child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Components"),
+                ),
             )
             .child(components)
             .into_any_element()
@@ -523,9 +514,7 @@ impl Studio {
                 .into_any_element(),
         };
         v_flex()
-            .w(px(LEFT_WIDTH))
-            .flex_shrink_0()
-            .h_full()
+            .size_full()
             .bg(theme.sidebar)
             .border_r_1()
             .border_color(theme.border)
@@ -792,9 +781,7 @@ impl Studio {
             .as_ref()
             .map_or(0, |c| c.active().count());
         v_flex()
-            .w(px(RIGHT_WIDTH))
-            .flex_shrink_0()
-            .h_full()
+            .size_full()
             .bg(theme.sidebar)
             .border_l_1()
             .border_color(theme.border)

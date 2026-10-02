@@ -12,8 +12,9 @@ use crate::comments::CommentStatus;
 use crate::editor::{Editor, InsertTarget};
 use crate::export::{CodeFormat, export};
 use crate::model::html::{ImportOptions, artboard_document, parse_document};
-use crate::model::{NodeId, NodeKind};
+use crate::model::{ArrowHeads, ConnectorStyle, Endpoint, NodeId, NodeKind};
 use crate::presets::{COMPONENTS, starter_document};
+use crate::shapes::{Stroke, freehand_svg, line_svg};
 
 /// One command's metadata.
 pub struct CommandSpec {
@@ -305,6 +306,82 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: true,
     },
     CommandSpec {
+        name: "list_connections",
+        title: "List connections",
+        description: "Connectors (arrows) on the current page: id, endpoints (layer ids or points), label, style.",
+        schema: || object(json!({}), &[]),
+        mutating: false,
+    },
+    CommandSpec {
+        name: "connect",
+        title: "Connect layers",
+        description: "Draw a connector arrow between two layers (it follows them as they move), or from/to free canvas points. Use for user flows and annotations.",
+        schema: || {
+            object(
+                json!({
+                    "from_id": { "type": "string", "description": NODE },
+                    "to_id": { "type": "string", "description": NODE },
+                    "from_point": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, y] in canvas coordinates when from_id is omitted." },
+                    "to_point": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                    "label": { "type": "string" },
+                    "style": { "type": "string", "enum": ["curved", "straight", "elbow"] },
+                    "heads": { "type": "string", "enum": ["end", "both", "none"] },
+                    "color": { "type": "string" }
+                }),
+                &[],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "update_connection",
+        title: "Update connection",
+        description: "Change a connector's label, color, style, or arrowheads.",
+        schema: || {
+            object(
+                json!({
+                    "connection_id": { "type": "integer" },
+                    "label": { "type": "string" },
+                    "style": { "type": "string", "enum": ["curved", "straight", "elbow"] },
+                    "heads": { "type": "string", "enum": ["end", "both", "none"] },
+                    "color": { "type": "string" }
+                }),
+                &["connection_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "delete_connection",
+        title: "Delete connection",
+        description: "Remove a connector.",
+        schema: || {
+            object(
+                json!({ "connection_id": { "type": "integer" } }),
+                &["connection_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "draw_vector",
+        title: "Draw vector",
+        description: "Draw a line, arrow, or freehand path as an inline SVG layer inside a parent, using points in the parent's coordinates.",
+        schema: || {
+            object(
+                json!({
+                    "parent_id": { "type": "string", "description": NODE },
+                    "kind": { "type": "string", "enum": ["line", "arrow", "path"] },
+                    "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 2, "maxItems": 4096 },
+                    "color": { "type": "string" },
+                    "width": { "type": "number", "minimum": 0.5, "maximum": 64 }
+                }),
+                &["parent_id", "kind", "points"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
         name: "undo",
         title: "Undo",
         description: "Undo the last edit.",
@@ -388,6 +465,7 @@ pub fn document_json(editor: &Editor) -> Value {
                 "index": index,
                 "name": page.name,
                 "current": index == editor.page,
+                "connections": page.connections.len(),
                 "artboards": page.artboards.iter().map(|a| {
                     let (width, height) = size_of(editor, a.root);
                     json!({
@@ -406,6 +484,54 @@ pub fn document_json(editor: &Editor) -> Value {
         "pages": pages,
         "selection": ids_json(&editor.selection),
     })
+}
+
+fn parse_style(value: Option<&str>) -> Result<Option<ConnectorStyle>, AgentError> {
+    value
+        .map(|v| {
+            ConnectorStyle::parse(v)
+                .ok_or_else(|| AgentError::Invalid(format!("unknown style {v:?}")))
+        })
+        .transpose()
+}
+
+fn parse_heads(value: Option<&str>) -> Result<Option<ArrowHeads>, AgentError> {
+    value
+        .map(|v| {
+            ArrowHeads::parse(v).ok_or_else(|| AgentError::Invalid(format!("unknown heads {v:?}")))
+        })
+        .transpose()
+}
+
+fn endpoint_json(editor: &Editor, endpoint: Endpoint) -> Value {
+    match endpoint {
+        Endpoint::Node(id) => {
+            json!({ "node_id": id.to_string(), "name": editor.doc.display_name(id) })
+        }
+        Endpoint::Point { x, y } => json!({ "point": [x, y] }),
+    }
+}
+
+/// Connectors on the current page.
+#[must_use]
+pub fn connections_json(editor: &Editor) -> Value {
+    let Some(page) = editor.doc.pages.get(editor.page) else {
+        return json!([]);
+    };
+    json!(
+        page.connections
+            .iter()
+            .map(|c| json!({
+                "id": c.id,
+                "from": endpoint_json(editor, c.from),
+                "to": endpoint_json(editor, c.to),
+                "label": c.label,
+                "color": c.color,
+                "style": c.style,
+                "heads": c.heads,
+            }))
+            .collect::<Vec<_>>()
+    )
 }
 
 /// Current selection with HTML.
@@ -759,6 +885,124 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
             comments.update(a.comment_id, a.body.as_deref(), status)?;
             Ok(json!({ "ok": true }))
         }
+        "list_connections" => Ok(connections_json(editor)),
+        "connect" => {
+            #[derive(Deserialize)]
+            struct A {
+                from_id: Option<String>,
+                to_id: Option<String>,
+                from_point: Option<[f32; 2]>,
+                to_point: Option<[f32; 2]>,
+                label: Option<String>,
+                style: Option<String>,
+                heads: Option<String>,
+                color: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            let endpoint = |id: Option<String>,
+                            point: Option<[f32; 2]>,
+                            which: &str|
+             -> Result<Endpoint, AgentError> {
+                match (id, point) {
+                    (Some(id), _) => Ok(Endpoint::Node(node(editor, &id)?)),
+                    (None, Some([x, y])) => Ok(Endpoint::Point { x, y }),
+                    (None, None) => Err(AgentError::Invalid(format!(
+                        "{which}_id or {which}_point is required"
+                    ))),
+                }
+            };
+            let from = endpoint(a.from_id, a.from_point, "from")?;
+            let to = endpoint(a.to_id, a.to_point, "to")?;
+            let style = parse_style(a.style.as_deref())?;
+            let heads = parse_heads(a.heads.as_deref())?;
+            let id = editor.connect(from, to)?;
+            if a.label.is_some() || a.color.is_some() || style.is_some() || heads.is_some() {
+                editor.history.seal();
+                if let Err(error) = editor.update_connection(
+                    id,
+                    a.label.as_deref(),
+                    a.color.as_deref(),
+                    style,
+                    heads,
+                    Some("connect"),
+                ) {
+                    editor.undo();
+                    return Err(error.into());
+                }
+            }
+            Ok(json!({ "connection_id": id, "revision": editor.revision }))
+        }
+        "update_connection" => {
+            #[derive(Deserialize)]
+            struct A {
+                connection_id: u64,
+                label: Option<String>,
+                style: Option<String>,
+                heads: Option<String>,
+                color: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            let style = parse_style(a.style.as_deref())?;
+            let heads = parse_heads(a.heads.as_deref())?;
+            editor.update_connection(
+                a.connection_id,
+                a.label.as_deref(),
+                a.color.as_deref(),
+                style,
+                heads,
+                None,
+            )?;
+            Ok(json!({ "revision": editor.revision }))
+        }
+        "delete_connection" => {
+            #[derive(Deserialize)]
+            struct A {
+                connection_id: u64,
+            }
+            let a: A = args(arguments)?;
+            editor.delete_connection(a.connection_id)?;
+            Ok(json!({ "revision": editor.revision }))
+        }
+        "draw_vector" => {
+            #[derive(Deserialize)]
+            struct A {
+                parent_id: String,
+                kind: String,
+                points: Vec<[f32; 2]>,
+                color: Option<String>,
+                width: Option<f32>,
+            }
+            let a: A = args(arguments)?;
+            let parent = node(editor, &a.parent_id)?;
+            if a.points.len() < 2 || a.points.len() > 4096 {
+                return Err(AgentError::Invalid(
+                    "points must have 2..=4096 entries".into(),
+                ));
+            }
+            let mut stroke = Stroke::default();
+            if let Some(color) = a.color {
+                stroke.color = crate::model::Color::parse_loose(&color)
+                    .ok_or_else(|| AgentError::Invalid(format!("invalid color {color:?}")))?
+                    .to_css();
+            }
+            if let Some(width) = a.width {
+                stroke.width = width.clamp(0.5, 64.0);
+            }
+            let points: Vec<(f32, f32)> = a.points.iter().map(|[x, y]| (*x, *y)).collect();
+            let svg = match a.kind.as_str() {
+                "line" | "arrow" => line_svg(
+                    points[0],
+                    points[points.len() - 1],
+                    &stroke,
+                    a.kind == "arrow",
+                ),
+                "path" => freehand_svg(&points, &stroke)
+                    .ok_or_else(|| AgentError::Invalid("path needs distinct points".into()))?,
+                other => return Err(AgentError::Invalid(format!("unknown kind {other:?}"))),
+            };
+            let id = editor.insert_vector(parent, &svg)?;
+            Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
+        }
         "undo" => Ok(json!({ "undone": editor.undo(), "revision": editor.revision })),
         "redo" => Ok(json!({ "redone": editor.redo(), "revision": editor.revision })),
         "save" => {
@@ -927,6 +1171,81 @@ mod tests {
         execute(&mut editor, "undo", json!({})).unwrap();
         let html = execute(&mut editor, "get_node", json!({ "node_id": heading })).unwrap();
         assert!(html["html"].as_str().unwrap().contains("font-size: 40px"));
+    }
+
+    #[test]
+    fn agent_can_connect_layers_and_draw_vectors() {
+        let mut editor = demo_editor();
+        let doc = execute(&mut editor, "get_document", json!({})).unwrap();
+        let desktop = doc["pages"][0]["artboards"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mobile = doc["pages"][0]["artboards"][1]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let made = execute(
+            &mut editor,
+            "connect",
+            json!({ "from_id": desktop, "to_id": mobile, "label": "Responsive", "style": "elbow" }),
+        )
+        .unwrap();
+        let id = made["connection_id"].as_u64().unwrap();
+        let list = execute(&mut editor, "list_connections", json!({})).unwrap();
+        assert_eq!(list[0]["label"], "Responsive");
+        assert_eq!(list[0]["style"], "elbow");
+        assert_eq!(list[0]["to"]["node_id"], mobile);
+        assert!(execute(&mut editor, "connect", json!({ "from_id": desktop })).is_err());
+        assert!(
+            execute(
+                &mut editor,
+                "connect",
+                json!({ "from_id": desktop, "to_point": [0, 0], "style": "wiggly" })
+            )
+            .is_err()
+        );
+        assert_eq!(
+            execute(&mut editor, "list_connections", json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "a rejected connect leaves nothing behind"
+        );
+        execute(
+            &mut editor,
+            "update_connection",
+            json!({ "connection_id": id, "heads": "both" }),
+        )
+        .unwrap();
+        let drawn = execute(
+            &mut editor,
+            "draw_vector",
+            json!({ "parent_id": desktop, "kind": "arrow", "points": [[40, 40], [200, 120]], "color": "#ff5a36", "width": 3 }),
+        )
+        .unwrap();
+        let html = execute(&mut editor, "get_node", json!({ "node_id": drawn["id"] })).unwrap();
+        assert!(
+            html["html"]
+                .as_str()
+                .unwrap()
+                .contains("stroke=\"#ff5a36\"")
+        );
+        execute(
+            &mut editor,
+            "delete_connection",
+            json!({ "connection_id": id }),
+        )
+        .unwrap();
+        assert!(
+            execute(&mut editor, "list_connections", json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

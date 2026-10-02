@@ -272,7 +272,11 @@ impl Importer<'_> {
             rules.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
             for (_, _, declarations) in rules {
                 for (property, value) in declarations {
-                    style.set(&property, &value);
+                    // Studio always lays out border-box and every saved file
+                    // declares it, so the reset is never inlined.
+                    if property != "box-sizing" {
+                        style.set(&property, &value);
+                    }
                 }
             }
         }
@@ -286,13 +290,14 @@ impl Importer<'_> {
 }
 
 fn strip_editor_attrs_from_svg(source: &str) -> String {
-    // Editor attributes live on the outer tag only; they are re-emitted on save.
+    // Editor attributes and the inline style live on the node and are
+    // re-emitted on the outer tag at save time.
     let Some(end) = source.find('>') else {
         return source.to_owned();
     };
     let (open, rest) = source.split_at(end);
     let mut cleaned = open.to_owned();
-    for name in EDITOR_ATTRS {
+    for name in EDITOR_ATTRS.iter().chain(&["style"]) {
         while let Some(start) = cleaned.find(&format!(" {name}=\"")) {
             let value_start = start + name.len() + 3;
             let Some(value_len) = cleaned[value_start..].find('"') else {
@@ -374,7 +379,7 @@ pub fn artboard_document(doc: &Document, root: NodeId) -> String {
     let title = escape_text(&doc.display_name(root));
     let body = to_html(doc, root, ExportOptions::STORAGE);
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n  <style>body {{ margin: 0; }}</style>\n</head>\n<body>\n{body}</body>\n</html>\n"
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title}</title>\n  <style>*, *::before, *::after {{ box-sizing: border-box; }} body {{ margin: 0; }}</style>\n</head>\n<body>\n{body}</body>\n</html>\n"
     )
 }
 
@@ -538,6 +543,18 @@ mod tests {
         assert!(matches!(&doc.get(svg).unwrap().kind, NodeKind::Svg(s) if s.contains("<path")));
         let code = to_html(&doc, roots[0], ExportOptions::CODE);
         assert!(!code.contains("data-id"));
+
+        // A styled SVG round-trips with exactly one style attribute.
+        let styled = parse_fragment(
+            &mut doc,
+            r#"<svg width="10" height="10" style="position: absolute; left: 4px"><path d="M0 0"/></svg>"#,
+            ImportOptions { keep_ids: false },
+        );
+        let saved = to_html(&doc, styled[0], ExportOptions::STORAGE);
+        assert_eq!(saved.matches("style=").count(), 1, "{saved}");
+        let mut again = Document::new();
+        let reparsed = parse_fragment(&mut again, &saved, ImportOptions { keep_ids: true });
+        assert_eq!(to_html(&again, reparsed[0], ExportOptions::STORAGE), saved);
     }
 
     #[test]

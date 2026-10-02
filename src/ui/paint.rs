@@ -20,6 +20,7 @@ use gpui_kit::{
     relative,
 };
 
+use crate::model::grid::{ColumnPlacement, Track, TrackList, place};
 use crate::model::style::{
     Align, Computed, Display, Length, LineHeight, Overflow, Position, TextAlign,
 };
@@ -108,6 +109,11 @@ pub(crate) struct Painter<'a> {
     pub fonts: &'a FontBook,
     /// A text layer being edited in place (its text is hidden).
     pub editing: Option<NodeId>,
+    /// Set when layout depended on measurements this frame did not have yet,
+    /// so the caller should render one more frame.
+    pub unsettled: std::cell::Cell<bool>,
+    /// Bounds from the previous frame (window coordinates).
+    pub measured: &'a HashMap<NodeId, Bounds<Pixels>>,
 }
 
 #[derive(Clone, Default)]
@@ -268,6 +274,7 @@ impl Painter<'_> {
         is_root: bool,
     ) -> Stateful<Div> {
         let mut el = div().id(element_id(id));
+        let mut emulated_grid = false;
         // Layout model. Block flow stacks children like a column flexbox whose
         // items stretch, which matches CSS block layout for non-inline boxes.
         match c.display {
@@ -283,11 +290,21 @@ impl Painter<'_> {
                     el = el.flex_wrap();
                 }
             }
+            Display::Grid if self.grid_plan(id, c).is_some() => {
+                // Rows of flex items emulate track lists GPUI cannot express.
+                el = el.flex().flex_col();
+                emulated_grid = true;
+            }
             Display::Grid => {
                 el = el.grid();
-                if let Some(columns) = c.grid_columns {
-                    el = el.grid_cols(columns);
-                }
+                let columns = c
+                    .grid_template_columns
+                    .as_deref()
+                    .and_then(TrackList::parse)
+                    .and_then(|list| list.uniform_fr())
+                    .or(c.grid_columns)
+                    .unwrap_or(1);
+                el = el.grid_cols(columns);
                 if let Some(rows) = c.grid_rows {
                     el = el.grid_rows(rows);
                 }
@@ -307,6 +324,11 @@ impl Painter<'_> {
             style.align_items = align_items(c.align_items);
             style.align_self = align_items(c.align_self);
             style.justify_content = justify(c.justify);
+            if emulated_grid {
+                // Rows stretch; grid alignment is applied inside each row.
+                style.align_items = Some(AlignItems::Stretch);
+                style.justify_content = None;
+            }
             style.gap.width = Some(DefiniteLength::from(self.px(c.column_gap)));
             style.gap.height = Some(DefiniteLength::from(self.px(c.row_gap)));
             let [pt, pr, pb, pl] = c.padding;
@@ -399,7 +421,7 @@ impl Painter<'_> {
                     style.border_style = Some(BorderStyle::Dashed);
                 }
             }
-            let [tl, tr, br, bl] = c.radius;
+            let [tl, tr, br, bl] = c.resolved_radii(c.width.px(), c.height.px());
             style.corner_radii.top_left = Some(AbsoluteLength::from(self.px(tl)));
             style.corner_radii.top_right = Some(AbsoluteLength::from(self.px(tr)));
             style.corner_radii.bottom_right = Some(AbsoluteLength::from(self.px(br)));
@@ -545,6 +567,8 @@ impl Painter<'_> {
                     } else {
                         el = el.child(text);
                     }
+                } else if let Some(tracks) = self.grid_plan(id, c) {
+                    el = self.grid_rows(el, node, c, &tracks, &inherited);
                 } else {
                     for child in &node.children {
                         if let Some(child) = self.node(*child, &inherited, false) {
@@ -646,6 +670,135 @@ impl Painter<'_> {
         el.child(img(path).size_full())
             .child(self.probe(id))
             .into_any_element()
+    }
+
+    /// Concrete column tracks when a grid needs emulation (non-uniform tracks).
+    fn grid_plan(&self, id: NodeId, c: &Computed) -> Option<Vec<Track>> {
+        if c.display != Display::Grid {
+            return None;
+        }
+        let list = TrackList::parse(c.grid_template_columns.as_deref()?)?;
+        if list.uniform_fr().is_some() {
+            return None;
+        }
+        let horizontal_padding = c.padding[1] + c.padding[3];
+        let container = c.width.px().map(|w| w - horizontal_padding).or_else(|| {
+            self.measured
+                .get(&id)
+                .map(|b| b.size.width.as_f32() / self.zoom - horizontal_padding)
+        });
+        if container.is_none() && list.auto.is_some() {
+            self.unsettled.set(true);
+        }
+        let items = self
+            .doc
+            .children(id)
+            .iter()
+            .filter(|child| self.is_grid_item(**child))
+            .count();
+        Some(list.resolve(container, c.column_gap, items))
+    }
+
+    fn is_grid_item(&self, id: NodeId) -> bool {
+        self.doc.get(id).is_some_and(|n| {
+            !n.hidden
+                && !matches!(&n.kind, NodeKind::Text(t) if t.trim().is_empty())
+                && n.style.computed().position != Position::Absolute
+                && n.style.computed().display != Display::None
+        })
+    }
+
+    fn grid_rows(
+        &self,
+        mut el: Stateful<Div>,
+        node: &Node,
+        c: &Computed,
+        tracks: &[Track],
+        inherited: &Inherited,
+    ) -> Stateful<Div> {
+        let container = c.width.px().map(|w| w - c.padding[1] - c.padding[3]);
+        let row_tracks = c.grid_template_rows.as_deref().and_then(TrackList::parse);
+        let items: Vec<NodeId> = node
+            .children
+            .iter()
+            .copied()
+            .filter(|id| self.is_grid_item(*id))
+            .collect();
+        let placements: Vec<ColumnPlacement> = items
+            .iter()
+            .map(|id| {
+                let computed = self
+                    .doc
+                    .get(*id)
+                    .map(|n| n.style.computed())
+                    .unwrap_or_default();
+                ColumnPlacement::parse(computed.grid_column.as_deref())
+            })
+            .collect();
+        let columns = tracks.len().max(1);
+        let cell = |tracks: &[Track]| -> Div {
+            let (mut fixed, mut fr, mut hug) = (0.0_f32, 0.0_f32, false);
+            for track in tracks {
+                let (px_part, fr_part, hugs) = track.sizing(container);
+                fixed += px_part;
+                fr += fr_part;
+                hug |= hugs;
+            }
+            fixed += c.column_gap * tracks.len().saturating_sub(1) as f32;
+            let mut wrapper = div().flex().flex_col();
+            if fr > 0.0 {
+                wrapper.style().flex_grow = Some(fr);
+                wrapper.style().flex_shrink = Some(1.0);
+                wrapper.style().flex_basis = Some(self.px(fixed).into());
+                wrapper = wrapper.min_w(px(0.0));
+            } else if hug {
+                wrapper = wrapper.flex_none();
+            } else {
+                wrapper = wrapper.w(self.px(fixed)).flex_shrink_0();
+            }
+            wrapper
+        };
+        for (row_index, row) in place(&placements, columns).into_iter().enumerate() {
+            let mut line = div().w_full().flex().flex_row().gap(self.px(c.column_gap));
+            // Grid alignment applies to items within a row (default stretch).
+            line.style().align_items = align_items(c.align_items).or(Some(AlignItems::Stretch));
+            if let Some(Track::Px(height)) = row_tracks
+                .as_ref()
+                .map(|list| list.resolve(None, c.row_gap, items.len()))
+                .and_then(|rows| rows.get(row_index).cloned())
+            {
+                line = line.h(self.px(height));
+            }
+            let mut column = 0;
+            for (item, start, span) in row {
+                // Empty tracks before an explicitly placed item keep their size.
+                for gap_column in column..start {
+                    line = line.child(cell(&tracks[gap_column..=gap_column]));
+                }
+                let mut wrapper = cell(&tracks[start..(start + span).min(columns)]);
+                if let Some(child) = self.node(items[item], inherited, false) {
+                    wrapper = wrapper.child(child);
+                }
+                line = line.child(wrapper);
+                column = start + span;
+            }
+            for rest in column..columns {
+                line = line.child(cell(&tracks[rest..=rest]));
+            }
+            el = el.child(line);
+        }
+        // Absolutely positioned children keep their own placement.
+        for child in &node.children {
+            if self
+                .doc
+                .get(*child)
+                .is_some_and(|n| n.style.computed().position == Position::Absolute)
+                && let Some(child) = self.node(*child, inherited, false)
+            {
+                el = el.child(child);
+            }
+        }
+        el
     }
 
     /// Flatten an inline subtree into text plus non-overlapping highlight runs.

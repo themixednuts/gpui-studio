@@ -680,6 +680,8 @@ pub struct Computed {
     pub border_style: Option<String>,
     /// Top-left, top-right, bottom-right, bottom-left.
     pub radius: [f32; 4],
+    /// Percentage radii (of the box size) for the same corners.
+    pub radius_percent: [Option<f32>; 4],
     pub opacity: f32,
     pub overflow: Overflow,
     pub font_family: Option<String>,
@@ -695,6 +697,10 @@ pub struct Computed {
     pub nowrap: Option<bool>,
     pub shadows: Vec<Shadow>,
     pub grid_columns: Option<u16>,
+    /// Raw `grid-template-columns` / `grid-template-rows` / `grid-column`.
+    pub grid_template_columns: Option<String>,
+    pub grid_template_rows: Option<String>,
+    pub grid_column: Option<String>,
     pub grid_rows: Option<u16>,
     pub column_span: Option<u16>,
     pub row_span: Option<u16>,
@@ -732,6 +738,7 @@ impl Default for Computed {
             border_color: None,
             border_style: None,
             radius: [0.0; 4],
+            radius_percent: [None; 4],
             opacity: 1.0,
             overflow: Overflow::Visible,
             font_family: None,
@@ -747,6 +754,9 @@ impl Default for Computed {
             nowrap: None,
             shadows: Vec::new(),
             grid_columns: None,
+            grid_template_columns: None,
+            grid_template_rows: None,
+            grid_column: None,
             grid_rows: None,
             column_span: None,
             row_span: None,
@@ -864,10 +874,34 @@ impl Computed {
             "border-left-width" => self.border_width[3] = border_width_px(value),
             "border-color" => self.border_color = Color::parse(value),
             "border-style" => self.border_style = Some(value.to_owned()),
-            "border-top-left-radius" => self.radius[0] = px_or_zero(value),
-            "border-top-right-radius" => self.radius[1] = px_or_zero(value),
-            "border-bottom-right-radius" => self.radius[2] = px_or_zero(value),
-            "border-bottom-left-radius" => self.radius[3] = px_or_zero(value),
+            "border-top-left-radius" => {
+                self.radius_percent[0] = match Length::parse(value) {
+                    Some(Length::Percent(percent)) => Some(percent),
+                    _ => None,
+                };
+                self.radius[0] = px_or_zero(value);
+            }
+            "border-top-right-radius" => {
+                self.radius_percent[1] = match Length::parse(value) {
+                    Some(Length::Percent(percent)) => Some(percent),
+                    _ => None,
+                };
+                self.radius[1] = px_or_zero(value);
+            }
+            "border-bottom-right-radius" => {
+                self.radius_percent[2] = match Length::parse(value) {
+                    Some(Length::Percent(percent)) => Some(percent),
+                    _ => None,
+                };
+                self.radius[2] = px_or_zero(value);
+            }
+            "border-bottom-left-radius" => {
+                self.radius_percent[3] = match Length::parse(value) {
+                    Some(Length::Percent(percent)) => Some(percent),
+                    _ => None,
+                };
+                self.radius[3] = px_or_zero(value);
+            }
             "opacity" => {
                 self.opacity = if let Some(percent) = value.strip_suffix('%') {
                     percent.parse::<f32>().unwrap_or(100.0) / 100.0
@@ -928,14 +962,40 @@ impl Computed {
             "text-transform" => self.text_transform = Some(value.to_owned()),
             "white-space" => self.nowrap = Some(value == "nowrap" || value == "pre"),
             "box-shadow" => self.shadows = Shadow::parse_list(value),
-            "grid-template-columns" => self.grid_columns = track_count(value),
-            "grid-template-rows" => self.grid_rows = track_count(value),
-            "grid-column" => self.column_span = span(value),
+            "grid-template-columns" => {
+                self.grid_columns = track_count(value);
+                self.grid_template_columns = Some(value.to_owned());
+            }
+            "grid-template-rows" => {
+                self.grid_rows = track_count(value);
+                self.grid_template_rows = Some(value.to_owned());
+            }
+            "grid-column" => {
+                self.column_span = span(value);
+                self.grid_column = Some(value.to_owned());
+            }
             "grid-row" => self.row_span = span(value),
             "z-index" => self.z_index = value.parse().ok(),
             "object-fit" => self.object_fit = Some(value.to_owned()),
             _ => {}
         }
+    }
+
+    /// Corner radii in px for a box of the given size (percentages resolve
+    /// against the smaller side; unknown sizes treat 50% as fully round).
+    #[must_use]
+    pub fn resolved_radii(&self, width: Option<f32>, height: Option<f32>) -> [f32; 4] {
+        let mut out = self.radius;
+        for (slot, percent) in out.iter_mut().zip(self.radius_percent) {
+            if let Some(percent) = percent {
+                *slot = match (width, height) {
+                    (Some(w), Some(h)) => w.min(h) * percent / 100.0,
+                    _ if percent >= 50.0 => 10_000.0,
+                    _ => 0.0,
+                };
+            }
+        }
+        out
     }
 
     /// Uniform padding, when all sides match.
@@ -996,6 +1056,9 @@ mod tests {
         assert_eq!(computed.shadows[0].blur, 12.0);
         assert_eq!(computed.grid_columns, Some(3));
         assert_eq!(computed.column_span, Some(2));
+        let round = Style::parse("width: 40px; height: 20px; border-radius: 50%").computed();
+        assert_eq!(round.resolved_radii(Some(40.0), Some(20.0)), [10.0; 4]);
+        assert_eq!(round.resolved_radii(None, None), [10_000.0; 4]);
     }
 
     #[test]

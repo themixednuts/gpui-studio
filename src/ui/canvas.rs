@@ -17,17 +17,19 @@ use gpui_kit::{
 
 use super::paint::{LayoutMap, Painter};
 use super::{
-    BringForward, CANVAS_CONTEXT, CommentTool, CopySelection, CutSelection, DeleteSelection,
-    DuplicateSelection, EnterSelection, EscapeSelection, FrameTool, GroupSelection, HandTool,
-    NudgeDown, NudgeDownBig, NudgeLeft, NudgeLeftBig, NudgeRight, NudgeRightBig, NudgeUp,
-    NudgeUpBig, PasteClipboard, RectangleTool, RenameSelection, RightTab, SelectAllSiblings,
-    SelectTool, SendBackward, Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked,
-    UngroupSelection, ZoomToSelection,
+    ArrowTool, BringForward, CANVAS_CONTEXT, CommentTool, ConnectorTool, CopySelection,
+    CutSelection, DeleteSelection, DuplicateSelection, EllipseTool, EnterSelection,
+    EscapeSelection, FrameTool, GroupSelection, HandTool, LineTool, NudgeDown, NudgeDownBig,
+    NudgeLeft, NudgeLeftBig, NudgeRight, NudgeRightBig, NudgeUp, NudgeUpBig, PasteClipboard,
+    PencilTool, RectangleTool, RenameSelection, RightTab, SelectAllSiblings, SelectTool,
+    SendBackward, Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked, UngroupSelection,
+    ZoomToSelection,
 };
 use crate::editor::{InsertTarget, Tool};
+use crate::model::connection::{Anchor, distance_to_polyline, midpoint, route};
 use crate::model::html::escape_text;
 use crate::model::style::{Display, Position, fmt_num};
-use crate::model::{NodeId, NodeKind};
+use crate::model::{ArrowHeads, Endpoint, NodeId, NodeKind};
 use crate::presets;
 
 const MIN_ZOOM: f32 = 0.05;
@@ -161,6 +163,17 @@ enum Drag {
         current: Point<Pixels>,
         parent: Option<NodeId>,
     },
+    /// Pencil, line, or arrow; points in document coordinates.
+    Stroke {
+        tool: Tool,
+        points: Vec<(f32, f32)>,
+        parent: Option<NodeId>,
+    },
+    Connect {
+        start: Point<Pixels>,
+        current: Point<Pixels>,
+        from: Endpoint,
+    },
 }
 
 /// Canvas UI state.
@@ -200,6 +213,17 @@ impl CanvasState {
             gesture: 0,
             rendered: None,
             text_edit: None,
+        }
+    }
+
+    /// Restore a saved camera instead of fitting the page.
+    pub(crate) fn restore(&mut self, zoom: f32, pan: Point<Pixels>) {
+        if zoom.is_finite() && zoom > 0.0 {
+            self.camera = Camera {
+                pan,
+                zoom: zoom.clamp(MIN_ZOOM, MAX_ZOOM),
+            };
+            self.needs_fit = false;
         }
     }
 
@@ -516,18 +540,36 @@ impl Studio {
                     self.open_comment_draft(id, (ax, ay), window, cx);
                 }
             }
-            Tool::Frame | Tool::Rectangle | Tool::Text => {
+            tool if tool.draws_box() => {
                 let path = self.hit_path(p, None);
                 let parent = path.iter().rev().copied().find(|id| self.is_container(*id));
                 self.canvas.drag = Some(Drag::Draw {
-                    tool: self.tool,
+                    tool,
                     start: p,
                     current: p,
                     parent,
                 });
             }
-            Tool::Hand => {}
+            Tool::Pencil | Tool::Line | Tool::Arrow => {
+                let path = self.hit_path(p, None);
+                let parent = path.iter().rev().copied().find(|id| self.is_container(*id));
+                let start = self.canvas.to_doc(p);
+                self.canvas.drag = Some(Drag::Stroke {
+                    tool: self.tool,
+                    points: vec![start, start],
+                    parent,
+                });
+            }
+            Tool::Connector => {
+                let from = self.endpoint_at(p, event.modifiers);
+                self.canvas.drag = Some(Drag::Connect {
+                    start: p,
+                    current: p,
+                    from,
+                });
+            }
             Tool::Select => self.select_down(event, window, cx),
+            _ => {}
         }
         cx.notify();
     }
@@ -535,6 +577,16 @@ impl Studio {
     fn select_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let p = event.position;
         let shift = event.modifiers.shift;
+        if self.handle_hit(p).is_none()
+            && let Some(id) = self.connection_hit(p)
+        {
+            self.selected_connection = Some(id);
+            self.editor.select([]);
+            self.right_tab = super::RightTab::Design;
+            self.inspector.invalidate();
+            return;
+        }
+        self.selected_connection = None;
         if let Some((id, handle)) = self.handle_hit(p)
             && let Some(rect) = self.canvas.doc_bounds(id)
         {
@@ -653,12 +705,16 @@ impl Studio {
                     self.choose_target(&path, event.modifiers)
                 }
             }
-            Tool::Frame | Tool::Rectangle | Tool::Text => self
+            Tool::Connector => {
+                let path = self.hit_path(event.position, None);
+                self.choose_target(&path, event.modifiers)
+            }
+            Tool::Hand => None,
+            _ => self
                 .hit_path(event.position, None)
                 .into_iter()
                 .rev()
                 .find(|id| self.is_container(*id)),
-            Tool::Hand => None,
         };
         if hover != self.canvas.hover {
             self.canvas.hover = hover;
@@ -786,8 +842,209 @@ impl Studio {
                     parent,
                 });
             }
+            Drag::Stroke {
+                tool,
+                mut points,
+                parent,
+            } => {
+                let mut point = self.canvas.to_doc(p);
+                if tool == Tool::Pencil {
+                    let last = points.last().copied().unwrap_or(point);
+                    let step = 1.5 / zoom;
+                    if ((point.0 - last.0).powi(2) + (point.1 - last.1).powi(2)).sqrt() >= step {
+                        points.push(point);
+                    }
+                } else {
+                    let start = points[0];
+                    if modifiers.shift {
+                        // Snap to 45° increments.
+                        let (dx, dy) = (point.0 - start.0, point.1 - start.1);
+                        let angle = (dy.atan2(dx) / std::f32::consts::FRAC_PI_4).round()
+                            * std::f32::consts::FRAC_PI_4;
+                        let length = (dx * dx + dy * dy).sqrt();
+                        point = (
+                            start.0 + length * angle.cos(),
+                            start.1 + length * angle.sin(),
+                        );
+                    }
+                    points = vec![start, point];
+                }
+                self.canvas.drag = Some(Drag::Stroke {
+                    tool,
+                    points,
+                    parent,
+                });
+            }
+            Drag::Connect { start, from, .. } => {
+                let path = self.hit_path(p, None);
+                self.canvas.hover = self.choose_target(&path, modifiers);
+                self.canvas.drag = Some(Drag::Connect {
+                    start,
+                    current: p,
+                    from,
+                });
+            }
         }
         cx.notify();
+    }
+
+    /// What a connector end attaches to at a window point.
+    fn endpoint_at(&self, p: Point<Pixels>, modifiers: Modifiers) -> Endpoint {
+        let path = self.hit_path(p, None);
+        match self.choose_target(&path, modifiers) {
+            Some(id) => Endpoint::Node(id),
+            None => {
+                let (x, y) = self.canvas.to_doc(p);
+                Endpoint::Point {
+                    x: x.round(),
+                    y: y.round(),
+                }
+            }
+        }
+    }
+
+    fn anchor(&self, endpoint: Endpoint) -> Option<Anchor> {
+        match endpoint {
+            Endpoint::Point { x, y } => Some(Anchor::Point(x, y)),
+            Endpoint::Node(id) => {
+                let b = self.canvas.doc_bounds(id)?;
+                Some(Anchor::Rect(
+                    b.origin.x,
+                    b.origin.y,
+                    b.size.width,
+                    b.size.height,
+                ))
+            }
+        }
+    }
+
+    /// Every connector on the current page as a window-space polyline.
+    pub(crate) fn connection_paths(&self) -> Vec<(u64, Vec<Point<Pixels>>)> {
+        let Some(page) = self.editor.doc.pages.get(self.editor.page) else {
+            return Vec::new();
+        };
+        let origin = self.canvas.origin();
+        page.connections
+            .iter()
+            .filter_map(|c| {
+                let line = route(self.anchor(c.from)?, self.anchor(c.to)?, c.style);
+                let points = line
+                    .into_iter()
+                    .map(|(x, y)| origin + self.canvas.doc_to_local(x, y))
+                    .collect();
+                Some((c.id, points))
+            })
+            .collect()
+    }
+
+    fn connection_hit(&self, p: Point<Pixels>) -> Option<u64> {
+        self.connection_paths()
+            .into_iter()
+            .map(|(id, points)| {
+                let points: Vec<(f32, f32)> = points
+                    .iter()
+                    .map(|q| (q.x.as_f32(), q.y.as_f32()))
+                    .collect();
+                (
+                    id,
+                    distance_to_polyline(&points, (p.x.as_f32(), p.y.as_f32())),
+                )
+            })
+            .filter(|(_, distance)| *distance <= 6.0)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    }
+
+    fn finish_connect(
+        &mut self,
+        start: Point<Pixels>,
+        end: Point<Pixels>,
+        from: Endpoint,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tool = Tool::Select;
+        if distance(start, end) < DRAG_THRESHOLD {
+            return;
+        }
+        let to = self.endpoint_at(end, Modifiers::default());
+        if to == from {
+            return;
+        }
+        if let Some(id) = self.apply(window, cx, |e| e.connect(from, to)) {
+            self.editor.select([]);
+            self.selected_connection = Some(id);
+        }
+    }
+
+    fn finish_stroke(
+        &mut self,
+        tool: Tool,
+        points: Vec<(f32, f32)>,
+        parent: Option<NodeId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let start = points[0];
+        let end = points[points.len() - 1];
+        let length = ((end.0 - start.0).powi(2) + (end.1 - start.1).powi(2)).sqrt();
+        if tool != Tool::Pencil && length < 3.0 {
+            return;
+        }
+        let stroke = crate::shapes::Stroke {
+            width: if tool == Tool::Pencil { 3.0 } else { 2.0 },
+            ..crate::shapes::Stroke::default()
+        };
+        let origin = parent
+            .and_then(|p| self.canvas.doc_bounds(p))
+            .map(|b| (b.origin.x, b.origin.y));
+        let build = |offset: (f32, f32)| -> Option<String> {
+            let local: Vec<(f32, f32)> = points
+                .iter()
+                .map(|(x, y)| (x - offset.0, y - offset.1))
+                .collect();
+            match tool {
+                Tool::Pencil => crate::shapes::freehand_svg(&local, &stroke),
+                _ => Some(crate::shapes::line_svg(
+                    local[0],
+                    local[local.len() - 1],
+                    &stroke,
+                    tool == Tool::Arrow,
+                )),
+            }
+        };
+        match (parent, origin) {
+            (Some(parent), Some(origin)) => {
+                let Some(svg) = build(origin) else { return };
+                self.apply(window, cx, |e| e.insert_vector(parent, &svg));
+            }
+            _ => {
+                // Outside any artboard: wrap the drawing in a transparent artboard.
+                let min_x = points.iter().map(|p| p.0).fold(f32::INFINITY, f32::min) - 24.0;
+                let min_y = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min) - 24.0;
+                let max_x = points.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max) + 24.0;
+                let max_y = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max) + 24.0;
+                let Some(svg) = build((min_x.round(), min_y.round())) else {
+                    return;
+                };
+                self.apply(window, cx, |e| {
+                    let board = e.create_artboard(
+                        "Drawing",
+                        ((max_x - min_x).round(), (max_y - min_y).round()),
+                        Some((min_x.round(), min_y.round())),
+                    )?;
+                    e.set_styles(
+                        &[board],
+                        &[
+                            ("background-color".into(), Some("transparent".into())),
+                            ("overflow".into(), Some("visible".into())),
+                        ],
+                        None,
+                    )?;
+                    e.insert_vector(board, &svg)
+                });
+            }
+        }
     }
 
     fn begin_drag(&self, start: Point<Pixels>, press: Press) -> Drag {
@@ -1054,6 +1311,21 @@ impl Studio {
             } => {
                 self.finish_draw(tool, start, current, parent, window, cx);
             }
+            Drag::Stroke {
+                tool,
+                points,
+                parent,
+            } => {
+                self.finish_stroke(tool, points, parent, window, cx);
+            }
+            Drag::Connect {
+                start,
+                current,
+                from,
+            } => {
+                self.canvas.hover = None;
+                self.finish_connect(start, current, from, window, cx);
+            }
             _ => {}
         }
         self.editor.history.seal();
@@ -1086,6 +1358,7 @@ impl Studio {
         let Some(parent) = parent else {
             let name = match tool {
                 Tool::Rectangle => "Rectangle",
+                Tool::Ellipse => "Ellipse",
                 Tool::Text => "Text",
                 _ => "Frame",
             };
@@ -1094,10 +1367,17 @@ impl Studio {
             }
             let created = self.apply(window, cx, |e| {
                 let board = e.create_artboard(name, (w, h), Some((x, y)))?;
-                if tool == Tool::Rectangle {
+                if matches!(tool, Tool::Rectangle | Tool::Ellipse) {
                     e.set_styles(
                         &[board],
                         &[("background-color".into(), Some("#d9d9d9".into()))],
+                        None,
+                    )?;
+                }
+                if tool == Tool::Ellipse {
+                    e.set_styles(
+                        &[board],
+                        &[("border-radius".into(), Some("50%".into()))],
                         None,
                     )?;
                 }
@@ -1137,6 +1417,7 @@ impl Studio {
         let flow = matches!(parent_computed.display, Display::Flex | Display::Grid);
         let mut style = match tool {
             Tool::Rectangle => presets::rectangle_style(w, h),
+            Tool::Ellipse => format!("{}; border-radius: 50%", presets::rectangle_style(w, h)),
             Tool::Text => format!("margin: 0; {}", presets::text_style()),
             _ => presets::frame_style(w, h),
         };
@@ -1153,6 +1434,7 @@ impl Studio {
         }
         let (tag, name, content) = match tool {
             Tool::Rectangle => ("div", "Rectangle", ""),
+            Tool::Ellipse => ("div", "Ellipse", ""),
             Tool::Text => ("p", "", "Text"),
             _ => ("div", "Frame", ""),
         };
@@ -1648,9 +1930,21 @@ impl Studio {
         });
 
         let pins = self.render_comment_pins(cx);
+        let connection_labels = self.render_connection_labels(cx);
         let draft = self.render_comment_draft(cx);
 
-        self.canvas.layout.borrow_mut().clear();
+        // Bounds persist across frames (each prepaint overwrites them), so
+        // overlays and hit tests always see a complete map; drop entries for
+        // layers that are gone or hidden. Last frame's bounds also feed
+        // measurement-dependent layout such as auto-fill grids.
+        {
+            let doc = &self.editor.doc;
+            self.canvas.layout.borrow_mut().retain(|id, _| {
+                doc.get(*id)
+                    .is_some_and(|n| !n.hidden && n.style.computed().display != Display::None)
+            });
+        }
+        let measured = self.canvas.layout.borrow().clone();
         let zoom = self.canvas.camera.zoom;
         let asset_dir = self
             .editor
@@ -1673,6 +1967,8 @@ impl Studio {
             layout: &self.canvas.layout,
             fonts: &self.fonts,
             editing,
+            unsettled: std::cell::Cell::new(false),
+            measured: &measured,
         };
         let mut artboards = Vec::new();
         let mut labels = Vec::new();
@@ -1718,6 +2014,10 @@ impl Studio {
             );
         }
 
+        if painter.unsettled.get() {
+            // Measurements this layout needs arrive with this frame.
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
+        }
         // Overlay data captured for the paint pass.
         let layout = self.canvas.layout.clone();
         let selection = self.editor.selection.clone();
@@ -1731,6 +2031,34 @@ impl Studio {
         let entity = cx.entity();
         let dragging = drag.is_some();
         let canvas_bounds = self.canvas.bounds.get();
+        let selected_connection = self.selected_connection;
+        let connections: Vec<(u64, Vec<Point<Pixels>>, Hsla, ArrowHeads)> = self
+            .connection_paths()
+            .into_iter()
+            .filter_map(|(id, points)| {
+                let connection = self.editor.doc.connection(id)?;
+                let color = crate::model::Color::parse_loose(&connection.color)
+                    .map_or(accent, super::paint::hsla);
+                Some((id, points, color, connection.heads))
+            })
+            .collect();
+        let origin = self.canvas.origin();
+        let stroke_draft: Option<(Tool, Vec<Point<Pixels>>)> = match &drag {
+            Some(Drag::Stroke { tool, points, .. }) => Some((
+                *tool,
+                points
+                    .iter()
+                    .map(|(x, y)| origin + self.canvas.doc_to_local(*x, *y))
+                    .collect(),
+            )),
+            _ => None,
+        };
+        let stroke_width = px((if matches!(stroke_draft, Some((Tool::Pencil, _))) {
+            3.0
+        } else {
+            2.0
+        }) * zoom);
+        let ink: Hsla = gpui_kit::rgb(0x17181c).into();
         let overlay = canvas(
             move |_, _, _| {},
             move |_bounds, (), window, _cx| {
@@ -1745,6 +2073,51 @@ impl Studio {
                         BorderStyle::Solid,
                     )
                 };
+                for (id, points, color, heads) in &connections {
+                    let selected = selected_connection == Some(*id);
+                    paint_polyline(
+                        window,
+                        points,
+                        px(if selected { 3.0 } else { 2.0 }),
+                        *color,
+                        false,
+                    );
+                    if points.len() >= 2 {
+                        let n = points.len();
+                        if matches!(heads, ArrowHeads::End | ArrowHeads::Both) {
+                            paint_arrowhead(window, points[n - 1], points[n - 2], *color);
+                        }
+                        if matches!(heads, ArrowHeads::Both) {
+                            paint_arrowhead(window, points[0], points[1], *color);
+                        }
+                        if selected {
+                            for end in [points[0], points[n - 1]] {
+                                let r = Bounds {
+                                    origin: end - point(px(4.0), px(4.0)),
+                                    size: size(px(8.0), px(8.0)),
+                                };
+                                window.paint_quad(quad(
+                                    r,
+                                    px(4.0),
+                                    gpui_kit::white(),
+                                    px(1.5),
+                                    *color,
+                                    BorderStyle::Solid,
+                                ));
+                            }
+                        }
+                    }
+                }
+                if let Some((tool, points)) = &stroke_draft {
+                    paint_polyline(window, points, stroke_width, ink, false);
+                    if *tool == Tool::Arrow && points.len() >= 2 {
+                        paint_arrowhead(window, points[points.len() - 1], points[0], ink);
+                    }
+                }
+                if let Some(Drag::Connect { start, current, .. }) = &drag {
+                    paint_polyline(window, &[*start, *current], px(2.0), accent, true);
+                    paint_arrowhead(window, *current, *start, accent);
+                }
                 if let Some(hover) = hover.or(draw_tool_parent)
                     && let Some(b) = layout.get(&hover)
                 {
@@ -1919,7 +2292,18 @@ impl Studio {
             .on_action(cx.listener(|this, _: &TextTool, _, cx| this.set_tool(Tool::Text, cx)))
             .on_action(cx.listener(|this, _: &HandTool, _, cx| this.set_tool(Tool::Hand, cx)))
             .on_action(cx.listener(|this, _: &CommentTool, _, cx| this.set_tool(Tool::Comment, cx)))
+            .on_action(cx.listener(|this, _: &EllipseTool, _, cx| this.set_tool(Tool::Ellipse, cx)))
+            .on_action(cx.listener(|this, _: &PencilTool, _, cx| this.set_tool(Tool::Pencil, cx)))
+            .on_action(cx.listener(|this, _: &LineTool, _, cx| this.set_tool(Tool::Line, cx)))
+            .on_action(cx.listener(|this, _: &ArrowTool, _, cx| this.set_tool(Tool::Arrow, cx)))
+            .on_action(
+                cx.listener(|this, _: &ConnectorTool, _, cx| this.set_tool(Tool::Connector, cx)),
+            )
             .on_action(cx.listener(|this, _: &DeleteSelection, window, cx| {
+                if let Some(id) = this.selected_connection.take() {
+                    this.apply(window, cx, |e| e.delete_connection(id));
+                    return;
+                }
                 let selection = this.editor.selection.clone();
                 this.apply(window, cx, |e| e.delete(&selection));
             }))
@@ -1995,6 +2379,7 @@ impl Studio {
             .children(labels)
             .child(overlay)
             .children(size_label)
+            .children(connection_labels)
             .children(pins)
             .when(self.editor.doc.artboards().next().is_none(), |this| {
                 this.child(
@@ -2020,6 +2405,56 @@ impl Studio {
             .children(text_editor)
             .children(draft)
             .into_any_element()
+    }
+
+    fn render_connection_labels(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let origin = self.canvas.origin();
+        let theme = cx.theme().clone();
+        self.connection_paths()
+            .into_iter()
+            .filter_map(|(id, points)| {
+                let connection = self.editor.doc.connection(id)?;
+                if connection.label.is_empty() {
+                    return None;
+                }
+                let line: Vec<(f32, f32)> = points
+                    .iter()
+                    .map(|p| (p.x.as_f32(), p.y.as_f32()))
+                    .collect();
+                let (x, y) = midpoint(&line);
+                let selected = self.selected_connection == Some(id);
+                Some(
+                    div()
+                        .id(SharedString::from(format!("connection-label-{id}")))
+                        .absolute()
+                        .left(px(x) - origin.x)
+                        .top(px(y) - origin.y - px(11.0))
+                        .h(px(22.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .rounded(px(11.0))
+                        .bg(theme.popover)
+                        .border_1()
+                        .border_color(if selected {
+                            theme.primary
+                        } else {
+                            theme.border
+                        })
+                        .text_size(px(11.0))
+                        .whitespace_nowrap()
+                        .child(connection.label.clone())
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.selected_connection = Some(id);
+                            this.editor.select([]);
+                            this.inspector.invalidate();
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                )
+            })
+            .collect()
     }
 
     fn render_comment_pins(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -2124,5 +2559,49 @@ impl Studio {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+fn paint_polyline(
+    window: &mut Window,
+    points: &[Point<Pixels>],
+    width: Pixels,
+    color: Hsla,
+    dashed: bool,
+) {
+    if points.len() < 2 {
+        return;
+    }
+    let mut builder = gpui_kit::PathBuilder::stroke(width);
+    if dashed {
+        builder = builder.dash_array(&[px(6.0), px(4.0)]);
+    }
+    builder.move_to(points[0]);
+    for p in &points[1..] {
+        builder.line_to(*p);
+    }
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
+fn paint_arrowhead(window: &mut Window, tip: Point<Pixels>, from: Point<Pixels>, color: Hsla) {
+    let (dx, dy) = ((tip.x - from.x).as_f32(), (tip.y - from.y).as_f32());
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < 0.5 {
+        return;
+    }
+    let (ux, uy) = (dx / length, dy / length);
+    let (size, half) = (11.0, 5.5);
+    let base = (tip.x.as_f32() - ux * size, tip.y.as_f32() - uy * size);
+    let left = point(px(base.0 - uy * half), px(base.1 + ux * half));
+    let right = point(px(base.0 + uy * half), px(base.1 - ux * half));
+    let mut builder = gpui_kit::PathBuilder::fill();
+    builder.move_to(tip);
+    builder.line_to(left);
+    builder.line_to(right);
+    builder.close();
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
     }
 }

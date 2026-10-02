@@ -12,7 +12,7 @@ use crate::comments::Comments;
 use crate::history::History;
 use crate::model::html::{ExportOptions, ImportOptions, parse_fragment, to_html};
 use crate::model::style::{Position, fmt_num};
-use crate::model::{Document, Length, NodeId, NodeKind};
+use crate::model::{ArrowHeads, ConnectorStyle, Document, Endpoint, Length, NodeId, NodeKind};
 use crate::presets;
 use crate::project::Project;
 
@@ -23,14 +23,24 @@ const AUTOSAVE_QUIET: Duration = Duration::from_millis(400);
 pub enum Tool {
     /// Select, move, resize.
     Select,
+    /// Pan the canvas.
+    Hand,
     /// Draw frames (artboards on empty canvas).
     Frame,
     /// Draw rectangles.
     Rectangle,
+    /// Draw ellipses.
+    Ellipse,
     /// Place text.
     Text,
-    /// Pan the canvas.
-    Hand,
+    /// Freehand vector strokes.
+    Pencil,
+    /// Straight vector lines.
+    Line,
+    /// Vector arrows.
+    Arrow,
+    /// Connectors between layers that follow them.
+    Connector,
     /// Drop comment pins.
     Comment,
 }
@@ -41,12 +51,26 @@ impl Tool {
     pub fn label(self) -> &'static str {
         match self {
             Self::Select => "Select (V)",
+            Self::Hand => "Hand (H)",
             Self::Frame => "Frame (F)",
             Self::Rectangle => "Rectangle (R)",
+            Self::Ellipse => "Ellipse (O)",
             Self::Text => "Text (T)",
-            Self::Hand => "Hand (H)",
+            Self::Pencil => "Pencil (P)",
+            Self::Line => "Line (L)",
+            Self::Arrow => "Arrow (Shift+L)",
+            Self::Connector => "Connector (X)",
             Self::Comment => "Comment (C)",
         }
+    }
+
+    /// Whether dragging draws a box-shaped layer.
+    #[must_use]
+    pub fn draws_box(self) -> bool {
+        matches!(
+            self,
+            Self::Frame | Self::Rectangle | Self::Ellipse | Self::Text
+        )
     }
 }
 
@@ -727,10 +751,8 @@ impl Editor {
     pub fn add_page(&mut self) -> Result<usize> {
         let index = self.doc.pages.len();
         self.edit(None, |doc| {
-            doc.pages.push(crate::model::Page {
-                name: format!("Page {}", index + 1),
-                artboards: Vec::new(),
-            });
+            doc.pages
+                .push(crate::model::Page::new(format!("Page {}", index + 1)));
             Ok(())
         })?;
         self.page = index;
@@ -776,6 +798,114 @@ impl Editor {
             ExportOptions::CODE
         };
         to_html(&self.doc, id, options)
+    }
+
+    /// Connect two endpoints on the current page (or the page of an attached layer).
+    pub fn connect(&mut self, from: Endpoint, to: Endpoint) -> Result<u64> {
+        let page = [from, to]
+            .iter()
+            .filter_map(|e| e.node())
+            .find_map(|n| self.doc.artboard_of(n).map(|a| a.root))
+            .and_then(|root| self.doc.artboard_index(root))
+            .map_or(self.page, |(page, _)| page);
+        self.edit(None, |doc| Ok(doc.add_connection(page, from, to)?))
+    }
+
+    /// Change a connection's label, color, routing, or arrowheads.
+    pub fn update_connection(
+        &mut self,
+        id: u64,
+        label: Option<&str>,
+        color: Option<&str>,
+        style: Option<ConnectorStyle>,
+        heads: Option<ArrowHeads>,
+        key: Option<&str>,
+    ) -> Result<()> {
+        if let Some(color) = color
+            && crate::model::Color::parse_loose(color).is_none()
+        {
+            bail!("invalid color {color:?}");
+        }
+        self.edit(key, |doc| {
+            let connection = doc
+                .connection_mut(id)
+                .ok_or_else(|| anyhow!("connection {id} does not exist"))?;
+            if let Some(label) = label {
+                connection.label = label.trim().to_owned();
+            }
+            if let Some(color) = color.and_then(crate::model::Color::parse_loose) {
+                connection.color = color.to_css();
+            }
+            if let Some(style) = style {
+                connection.style = style;
+            }
+            if let Some(heads) = heads {
+                connection.heads = heads;
+            }
+            Ok(())
+        })
+    }
+
+    /// Delete a connection.
+    pub fn delete_connection(&mut self, id: u64) -> Result<()> {
+        self.edit(None, |doc| {
+            if doc.remove_connection(id) {
+                Ok(())
+            } else {
+                bail!("connection {id} does not exist")
+            }
+        })
+    }
+
+    /// Insert an absolutely positioned vector (inline SVG) into a parent,
+    /// making the parent a positioning context so browsers place it the same.
+    pub fn insert_vector(&mut self, parent: NodeId, svg: &str) -> Result<NodeId> {
+        let parent_static = self
+            .doc
+            .get(parent)
+            .is_some_and(|p| p.style.computed().position == Position::Static);
+        let ids = self.edit(None, |doc| {
+            if parent_static && let Some(node) = doc.get_mut(parent) {
+                node.style.set("position", "relative");
+            }
+            let roots = parse_fragment(doc, svg, ImportOptions { keep_ids: false });
+            let [root] = roots.as_slice() else {
+                bail!("a vector must be a single <svg> element");
+            };
+            doc.attach(*root, parent, None)?;
+            Ok(*root)
+        })?;
+        self.selection = vec![ids];
+        Ok(ids)
+    }
+
+    /// Recolor or re-weight the strokes of vector layers.
+    pub fn set_vector_stroke(
+        &mut self,
+        ids: &[NodeId],
+        color: Option<&str>,
+        width: Option<f32>,
+        key: Option<&str>,
+    ) -> Result<()> {
+        if let Some(color) = color
+            && crate::model::Color::parse_loose(color).is_none()
+        {
+            bail!("invalid color {color:?}");
+        }
+        let color = color
+            .and_then(crate::model::Color::parse_loose)
+            .map(|c| c.to_css());
+        self.edit(key, |doc| {
+            for id in ids {
+                let node = doc
+                    .get_mut(*id)
+                    .ok_or_else(|| anyhow!("node {id} does not exist"))?;
+                if let NodeKind::Svg(source) = &mut node.kind {
+                    *source = crate::shapes::set_svg_stroke(source, color.as_deref(), width);
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Set a fixed size in document pixels.
@@ -905,6 +1035,65 @@ mod tests {
             .unwrap();
         assert!(editor.doc.is_artboard(replaced[0]));
         assert_eq!(editor.doc.pages[0].artboards[0].root, replaced[0]);
+    }
+
+    #[test]
+    fn connections_and_vectors_are_undoable_edits() {
+        let (mut editor, board) = editor();
+        let ids = editor
+            .insert_html(
+                "<div>A</div><div>B</div>",
+                InsertTarget {
+                    parent: Some(board),
+                    index: None,
+                },
+            )
+            .unwrap();
+        let c = editor
+            .connect(Endpoint::Node(ids[0]), Endpoint::Node(ids[1]))
+            .unwrap();
+        editor
+            .update_connection(
+                c,
+                Some("next"),
+                Some("#ff0000"),
+                Some(ConnectorStyle::Elbow),
+                None,
+                None,
+            )
+            .unwrap();
+        let connection = editor.doc.connection(c).unwrap();
+        assert_eq!(
+            (connection.label.as_str(), connection.color.as_str()),
+            ("next", "#ff0000")
+        );
+        assert!(
+            editor
+                .update_connection(c, None, Some("nope"), None, None, None)
+                .is_err()
+        );
+        let svg = crate::shapes::line_svg(
+            (0.0, 0.0),
+            (50.0, 0.0),
+            &crate::shapes::Stroke::default(),
+            true,
+        );
+        let vector = editor.insert_vector(ids[0], &svg).unwrap();
+        assert_eq!(
+            editor.doc.get(ids[0]).unwrap().style.get("position"),
+            Some("relative")
+        );
+        editor
+            .set_vector_stroke(&[vector], Some("#00ff00"), Some(5.0), None)
+            .unwrap();
+        let NodeKind::Svg(source) = &editor.doc.get(vector).unwrap().kind else {
+            panic!("svg")
+        };
+        assert!(source.contains("stroke=\"#00ff00\""));
+        editor.delete_connection(c).unwrap();
+        assert!(editor.doc.connection(c).is_none());
+        editor.undo();
+        assert!(editor.doc.connection(c).is_some());
     }
 
     #[test]

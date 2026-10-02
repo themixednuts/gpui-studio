@@ -84,7 +84,9 @@ fn html_with_classes(doc: &Document, id: NodeId) -> String {
     let mut css = String::new();
     let mut html = String::new();
     write_classed(doc, id, 0, &mut used, &mut css, &mut html);
-    format!("<style>\n{css}</style>\n\n{html}")
+    format!(
+        "<style>\n*, *::before, *::after {{ box-sizing: border-box; }}\n{css}</style>\n\n{html}"
+    )
 }
 
 fn write_classed(
@@ -325,8 +327,12 @@ fn gpui_style_calls(c: &Computed) -> Vec<String> {
             calls.push("border_dashed()".to_owned());
         }
     }
-    let [tl, tr, brr, bll] = c.radius;
-    if tl > 0.0 || tr > 0.0 || brr > 0.0 || bll > 0.0 {
+    let [tl, tr, brr, bll] = c.resolved_radii(c.width.px(), c.height.px());
+    let full = [tl, tr, brr, bll].iter().all(|r| *r >= 10_000.0);
+    if full {
+        calls.push("rounded_full()".to_owned());
+    }
+    if !full && (tl > 0.0 || tr > 0.0 || brr > 0.0 || bll > 0.0) {
         if tl == tr && tr == brr && brr == bll {
             calls.push(format!("rounded({})", px_literal(tl)));
         } else {
