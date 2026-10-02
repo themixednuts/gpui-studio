@@ -442,6 +442,29 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: true,
     },
     CommandSpec {
+        name: "list_links",
+        title: "List prototype links",
+        description: "Prototype links on the current page: which layer navigates to which artboard (or back) and with what transition.",
+        schema: || object(json!({}), &[]),
+        mutating: false,
+    },
+    CommandSpec {
+        name: "set_link",
+        title: "Set prototype link",
+        description: "Make clicking a layer in present mode navigate to an artboard (target_id), go back (target \"back\"), or remove the link (omit target).",
+        schema: || {
+            object(
+                json!({
+                    "node_id": { "type": "string", "description": NODE },
+                    "target_id": { "type": "string", "description": "Artboard id, or \"back\"." },
+                    "transition": { "type": "string", "enum": ["instant", "dissolve", "slide-left", "slide-right"] }
+                }),
+                &["node_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
         name: "list_variables",
         title: "List variables",
         description: "Design variables (CSS custom properties on :root) with their values, resolved values, kind (color, number, other), and how many layers use each. Use them in styles as var(--name).",
@@ -870,6 +893,49 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
             } else {
                 editor.reset_overrides(id)?;
             }
+            Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
+        }
+        "list_links" => {
+            use crate::model::prototype::LinkTarget;
+            let doc = &editor.doc;
+            Ok(Value::Array(
+                doc.page_links(editor.page)
+                    .into_iter()
+                    .map(|l| {
+                        json!({
+                            "node_id": l.source.to_string(),
+                            "node_name": doc.display_name(l.source),
+                            "target": match l.target {
+                                LinkTarget::Back => json!("back"),
+                                LinkTarget::Artboard(id) => json!({ "id": id.to_string(), "name": doc.display_name(id) }),
+                            },
+                            "transition": l.transition.as_str(),
+                        })
+                    })
+                    .collect(),
+            ))
+        }
+        "set_link" => {
+            use crate::model::prototype::{LinkTarget, Transition};
+            #[derive(Deserialize)]
+            struct A {
+                node_id: String,
+                target_id: Option<String>,
+                transition: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            let id = node(editor, &a.node_id)?;
+            let target = match a.target_id.as_deref() {
+                None => None,
+                Some("back") => Some(LinkTarget::Back),
+                Some(target) => Some(LinkTarget::Artboard(node(editor, target)?)),
+            };
+            let transition = match a.transition.as_deref() {
+                None => Transition::Instant,
+                Some(t) => Transition::parse(t)
+                    .ok_or_else(|| AgentError::Invalid(format!("unknown transition {t:?}")))?,
+            };
+            editor.set_link(id, target, transition)?;
             Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
         }
         "list_variables" => Ok(variables_json(editor)),
@@ -1839,6 +1905,52 @@ mod tests {
                 json!({ "node_id": instance })
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn agent_links_screens_for_prototypes() {
+        let mut editor = demo_editor();
+        let desktop = editor.doc.pages[0].artboards[0].root;
+        let mobile = editor.doc.pages[0].artboards[1].root.to_string();
+        let button = editor
+            .doc
+            .descendants(desktop)
+            .into_iter()
+            .find(|id| editor.doc.get(*id).is_some_and(|n| n.tag() == "button"))
+            .unwrap()
+            .to_string();
+        execute(
+            &mut editor,
+            "set_link",
+            json!({ "node_id": button, "target_id": mobile, "transition": "slide-left" }),
+        )
+        .unwrap();
+        let links = execute(&mut editor, "list_links", json!({})).unwrap();
+        assert_eq!(links[0]["target"]["id"], mobile.as_str());
+        assert_eq!(links[0]["transition"], "slide-left");
+        let code = execute(
+            &mut editor,
+            "export_code",
+            json!({ "node_id": button, "format": "html" }),
+        )
+        .unwrap();
+        assert!(!code["code"].as_str().unwrap().contains("data-link"));
+        assert!(
+            execute(
+                &mut editor,
+                "set_link",
+                json!({ "node_id": button, "target_id": button })
+            )
+            .is_err()
+        );
+        execute(&mut editor, "set_link", json!({ "node_id": button })).unwrap();
+        assert!(
+            execute(&mut editor, "list_links", json!({}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
         );
     }
 }

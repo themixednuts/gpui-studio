@@ -39,6 +39,7 @@ pub(crate) enum LeftTab {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RightTab {
     Design,
+    Prototype,
     Code,
     Comments,
 }
@@ -71,6 +72,8 @@ pub(crate) struct Studio {
     pub(crate) panels: PanelLayout,
     /// Variable being edited in the Variables tab: (name, editing the value?, input).
     pub(crate) variable_edit: Option<(String, bool, Entity<InputState>)>,
+    /// A running presentation.
+    pub(crate) present: Option<super::present::Present>,
     /// Pending drop target while dragging a row in the layer list.
     pub(crate) layer_drop: Option<(NodeId, crate::editor::DropPosition)>,
     panel_drag: Option<(PanelSide, f32, f32)>,
@@ -119,6 +122,7 @@ impl Studio {
             selected_connection: None,
             panels: panels.clamped(),
             layer_drop: None,
+            present: None,
             variable_edit: None,
             panel_drag: None,
             shown_status: String::new(),
@@ -351,6 +355,14 @@ impl Studio {
             .border_color(theme.border)
             .shadow_md()
             .child(
+                Button::new("present")
+                    .icon(Icon::new(Lucide::Play))
+                    .ghost()
+                    .xsmall()
+                    .tooltip("Present (⌥⌘↵)")
+                    .on_click(cx.listener(|this, _, window, cx| this.start_present(window, cx))),
+            )
+            .child(
                 Button::new("undo")
                     .icon(Icon::new(Lucide::Undo2))
                     .ghost()
@@ -459,6 +471,9 @@ impl Studio {
 
 impl Render for Studio {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.present.is_some() {
+            return self.render_present(window, cx);
+        }
         self.sync_inspector(window, cx);
         if self.layer_drop.is_some() && !cx.has_active_drag() {
             self.layer_drop = None;
@@ -545,6 +560,7 @@ impl Render for Studio {
                     .h_full()
                     .child(panel)
             }))
+            .into_any_element()
     }
 }
 

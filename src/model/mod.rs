@@ -12,6 +12,7 @@ pub mod connection;
 pub mod css;
 pub mod grid;
 pub mod html;
+pub mod prototype;
 pub mod style;
 pub mod variables;
 

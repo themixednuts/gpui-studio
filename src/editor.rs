@@ -1335,6 +1335,45 @@ impl Editor {
         })
     }
 
+    /// Set (or clear, with `None`) the prototype link on a layer.
+    pub fn set_link(
+        &mut self,
+        id: NodeId,
+        target: Option<crate::model::prototype::LinkTarget>,
+        transition: crate::model::prototype::Transition,
+    ) -> Result<()> {
+        use crate::model::prototype::{LINK_ATTR, LinkTarget, TRANSITION_ATTR, Transition};
+        if self.doc.get(id).is_none_or(crate::model::Node::is_text) {
+            bail!("links go on layers, not text runs");
+        }
+        if let Some(LinkTarget::Artboard(board)) = target
+            && !self.doc.is_artboard(board)
+        {
+            bail!("{board} is not an artboard");
+        }
+        self.edit(None, |doc| {
+            let node = doc.get_mut(id).context("layer does not exist")?;
+            match target {
+                Some(target) => {
+                    node.set_attr(LINK_ATTR, &target.to_attr());
+                    node.set_attr(
+                        TRANSITION_ATTR,
+                        if transition == Transition::Instant {
+                            ""
+                        } else {
+                            transition.as_str()
+                        },
+                    );
+                }
+                None => {
+                    node.set_attr(LINK_ATTR, "");
+                    node.set_attr(TRANSITION_ATTR, "");
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Create or update a design variable. Returns its normalized name.
     pub fn set_variable(&mut self, name: &str, value: &str) -> Result<String> {
         let name = crate::model::variables::normalize_name(name)

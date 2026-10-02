@@ -962,6 +962,7 @@ impl Studio {
         let tab = self.right_tab;
         let content = match tab {
             RightTab::Design => self.render_inspector(window, cx),
+            RightTab::Prototype => self.render_prototype_panel(cx),
             RightTab::Code => self.render_code(cx),
             RightTab::Comments => self.render_comments(cx),
         };
@@ -984,10 +985,12 @@ impl Studio {
                         .w_full()
                         .selected_index(match tab {
                             RightTab::Design => 0,
-                            RightTab::Code => 1,
-                            RightTab::Comments => 2,
+                            RightTab::Prototype => 1,
+                            RightTab::Code => 2,
+                            RightTab::Comments => 3,
                         })
                         .child(Tab::new().label("Design"))
+                        .child(Tab::new().label("Prototype"))
                         .child(Tab::new().label("Code"))
                         .child(Tab::new().label(if open > 0 {
                             format!("Comments {open}")
@@ -997,7 +1000,8 @@ impl Studio {
                         .on_click(cx.listener(|this, index: &usize, _, cx| {
                             this.right_tab = match index {
                                 0 => RightTab::Design,
-                                1 => RightTab::Code,
+                                1 => RightTab::Prototype,
+                                2 => RightTab::Code,
                                 _ => RightTab::Comments,
                             };
                             cx.notify();

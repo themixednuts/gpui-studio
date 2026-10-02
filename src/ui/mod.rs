@@ -4,6 +4,7 @@ mod canvas;
 mod inspector;
 mod paint;
 mod panels;
+mod present;
 mod studio;
 mod variables;
 mod workspace;
@@ -85,7 +86,8 @@ mod actions {
             DistributeVertical,
             PlaceImage,
             CreateComponent,
-            DetachInstance
+            DetachInstance,
+            StartPresenting
         ]
     );
 }
@@ -162,6 +164,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-k", PlaceImage, c),
         KeyBinding::new("secondary-alt-k", CreateComponent, c),
         KeyBinding::new("secondary-alt-b", DetachInstance, c),
+        KeyBinding::new("secondary-alt-enter", StartPresenting, c),
         KeyBinding::new("alt-a", AlignLeft, c),
         KeyBinding::new("alt-h", AlignHCenter, c),
         KeyBinding::new("alt-d", AlignRight, c),
@@ -357,7 +360,9 @@ gpui_kit::assets::icon_assets!(
         AlignVerticalSpaceAround,
         Variable,
         Unlink,
-        Hexagon
+        Hexagon,
+        ArrowLeft,
+        Play
     ]
 );
 
@@ -798,5 +803,80 @@ mod tests {
             assert_eq!(editor.doc.root_of(image), desktop);
         });
         assert!(project.join("artboards/assets/pasted-image.png").exists());
+    }
+
+    #[gpui_kit::test]
+    fn presenting_follows_prototype_links(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (handle, workspace, automation) = boot(
+            cx,
+            LaunchConfig {
+                project: Some(dir.path().join("design")),
+                example: None,
+                state_path: Some(dir.path().join("workspace.ron")),
+                mcp: false,
+            },
+        );
+        let studio = cx.update(|cx| workspace.read(cx).tabs[0].clone());
+        let (desktop, mobile, button) = cx.update(|cx| {
+            studio.update(cx, |s, _| {
+                let doc = &s.editor.doc;
+                let desktop = doc.pages[0].artboards[0].root;
+                let mobile = doc.pages[0].artboards[1].root;
+                let button = doc
+                    .descendants(desktop)
+                    .into_iter()
+                    .find(|id| doc.get(*id).is_some_and(|n| n.tag() == "button"))
+                    .expect("starter button");
+                s.editor
+                    .set_link(
+                        button,
+                        Some(crate::model::prototype::LinkTarget::Artboard(mobile)),
+                        crate::model::prototype::Transition::Dissolve,
+                    )
+                    .expect("link");
+                s.editor.select([desktop]);
+                (desktop, mobile, button)
+            })
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+            studio.update(cx, |s, cx| s.start_present(window, cx));
+        })
+        .expect("present");
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+            assert_eq!(
+                studio.read(cx).present.as_ref().map(|p| p.current),
+                Some(desktop)
+            );
+            click(window, cx, center(&automation, button), 1);
+        })
+        .expect("click hotspot");
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                studio.read(cx).present.as_ref().map(|p| p.current),
+                Some(mobile)
+            );
+            window.press("left", cx);
+        })
+        .expect("back");
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                studio.read(cx).present.as_ref().map(|p| p.current),
+                Some(desktop)
+            );
+            window.press("escape", cx);
+        })
+        .expect("exit");
+        cx.run_until_parked();
+        cx.update(|cx| assert!(studio.read(cx).present.is_none()));
     }
 }

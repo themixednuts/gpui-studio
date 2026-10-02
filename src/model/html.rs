@@ -259,9 +259,12 @@ impl Importer<'_> {
             let mut node = Node::element(id, "svg");
             node.kind = NodeKind::Svg(strip_editor_attrs_from_svg(&element.html()));
             self.apply_common(&mut node, element);
-            for name in super::components::COMPONENT_ATTRS {
+            for name in super::components::COMPONENT_ATTRS
+                .iter()
+                .chain(&super::prototype::PROTOTYPE_ATTRS)
+            {
                 if let Some(value) = element.value().attr(name) {
-                    node.attrs.push((name.to_owned(), value.to_owned()));
+                    node.attrs.push(((*name).to_owned(), value.to_owned()));
                 }
             }
             return Some(self.doc.add(node));
@@ -335,6 +338,7 @@ fn strip_editor_attrs_from_svg(source: &str) -> String {
     for name in EDITOR_ATTRS
         .iter()
         .chain(&super::components::COMPONENT_ATTRS)
+        .chain(&super::prototype::PROTOTYPE_ATTRS)
         .chain(&["style"])
     {
         while let Some(start) = cleaned.find(&format!(" {name}=\"")) {
@@ -440,7 +444,10 @@ fn open_tag(doc: &Document, node: &Node, tag: &str, options: ExportOptions) -> S
         }
     }
     for (name, value) in &node.attrs {
-        if !options.editor_attrs && super::components::COMPONENT_ATTRS.contains(&name.as_str()) {
+        if !options.editor_attrs
+            && (super::components::COMPONENT_ATTRS.contains(&name.as_str())
+                || super::prototype::PROTOTYPE_ATTRS.contains(&name.as_str()))
+        {
             continue;
         }
         if value.is_empty() {

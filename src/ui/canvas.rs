@@ -23,8 +23,9 @@ use super::{
     DuplicateSelection, EllipseTool, EnterSelection, EscapeSelection, FrameTool, GroupSelection,
     HandTool, LineTool, NudgeDown, NudgeDownBig, NudgeLeft, NudgeLeftBig, NudgeRight,
     NudgeRightBig, NudgeUp, NudgeUpBig, PasteClipboard, PencilTool, PlaceImage, RectangleTool,
-    RenameSelection, RightTab, SelectAllSiblings, SelectTool, SendBackward, Studio, TextTool,
-    ToggleAutoLayout, ToggleHidden, ToggleLocked, UngroupSelection, ZoomToSelection,
+    RenameSelection, RightTab, SelectAllSiblings, SelectTool, SendBackward, StartPresenting,
+    Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked, UngroupSelection,
+    ZoomToSelection,
 };
 use crate::editor::{ImagePlacement, InsertTarget, Tool};
 use crate::geometry::{Align, Axis, Edges, Guide, Rect, guides, snap};
@@ -979,6 +980,30 @@ impl Studio {
                     .map(|(x, y)| origin + self.canvas.doc_to_local(x, y))
                     .collect();
                 Some((c.id, points))
+            })
+            .collect()
+    }
+
+    /// Prototype flows on the current page as window-space polylines
+    /// (source layer → target artboard). Back links have no arrow.
+    fn flow_paths(&self) -> Vec<Vec<Point<Pixels>>> {
+        let origin = self.canvas.origin();
+        self.editor
+            .doc
+            .page_links(self.editor.page)
+            .into_iter()
+            .filter_map(|link| {
+                let crate::model::prototype::LinkTarget::Artboard(target) = link.target else {
+                    return None;
+                };
+                let from = self.anchor(Endpoint::Node(link.source))?;
+                let to = self.anchor(Endpoint::Node(target))?;
+                let line = route(from, to, crate::model::ConnectorStyle::Curved);
+                Some(
+                    line.into_iter()
+                        .map(|(x, y)| origin + self.canvas.doc_to_local(x, y))
+                        .collect(),
+                )
             })
             .collect()
     }
@@ -2324,6 +2349,22 @@ impl Studio {
         }) * zoom);
         let ink: Hsla = gpui_kit::rgb(0x17181c).into();
         let guide_color: Hsla = gpui_kit::rgb(0xf24822).into();
+        let prototyping = self.right_tab == RightTab::Prototype;
+        let flows = if prototyping {
+            self.flow_paths()
+        } else {
+            Vec::new()
+        };
+        let flow_sources: Vec<Bounds<Pixels>> = if prototyping {
+            self.editor
+                .doc
+                .page_links(self.editor.page)
+                .iter()
+                .filter_map(|l| self.canvas.window_bounds(l.source))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let componentish: BTreeSet<NodeId> = self
             .editor
             .selection
@@ -2405,6 +2446,29 @@ impl Studio {
                                 ));
                             }
                         }
+                    }
+                }
+                let flow = super::present::FLOW_COLOR;
+                for b in &flow_sources {
+                    window.paint_quad(outline_quad(*b, 1.5, flow));
+                }
+                for points in &flows {
+                    paint_polyline(window, points, px(2.0), flow, false);
+                    if let [.., a, b] = points.as_slice() {
+                        paint_arrowhead(window, *b, *a, flow);
+                    }
+                    if let Some(start) = points.first() {
+                        window.paint_quad(quad(
+                            Bounds {
+                                origin: *start - point(px(4.0), px(4.0)),
+                                size: size(px(8.0), px(8.0)),
+                            },
+                            px(4.0),
+                            flow,
+                            px(1.5),
+                            gpui_kit::white(),
+                            BorderStyle::Solid,
+                        ));
                     }
                 }
                 for line in &guide_lines {
@@ -2697,6 +2761,7 @@ impl Studio {
                 }
             }))
             .on_action(cx.listener(|this, _: &PlaceImage, w, cx| this.prompt_place_image(w, cx)))
+            .on_action(cx.listener(|this, _: &StartPresenting, w, cx| this.start_present(w, cx)))
             .on_action(cx.listener(|this, _: &CreateComponent, window, cx| {
                 if let Some(id) = this.editor.primary() {
                     this.apply(window, cx, |e| e.create_component(id, None));
