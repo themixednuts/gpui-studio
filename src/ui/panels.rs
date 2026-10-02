@@ -529,6 +529,109 @@ impl Studio {
         list.into_any_element()
     }
 
+    fn render_history(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let Some(versions) = &self.editor.versions else {
+            return div()
+                .p_3()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Version history is available for saved projects.")
+                .into_any_element();
+        };
+        let mut list = v_flex().gap_px().pb_4().child(
+            h_flex()
+                .px_3()
+                .h(px(32.0))
+                .justify_between()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Versions")
+                .child(
+                    Button::new("save-version")
+                        .label("Save version")
+                        .xsmall()
+                        .outline()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let count = this
+                                .editor
+                                .versions
+                                .as_ref()
+                                .map_or(0, |v| v.list().iter().filter(|v| !v.auto).count());
+                            let name = format!("Version {}", count + 1);
+                            this.apply(window, cx, |e| e.checkpoint(&name, "You", false));
+                        })),
+                ),
+        );
+        for version in versions.list() {
+            let id = version.id;
+            let when = crate::workspace::relative_time(version.id / 1000);
+            let group: SharedString = format!("version-{id}").into();
+            list = list.child(
+                h_flex()
+                    .id(SharedString::from(format!("version-row-{id}")))
+                    .group(group.clone())
+                    .mx_1p5()
+                    .px_1p5()
+                    .py_1()
+                    .gap_2()
+                    .rounded(px(6.0))
+                    .hover(|this| this.bg(theme.secondary))
+                    .child(div().size(px(8.0)).rounded_full().bg(if version.auto {
+                        theme.border
+                    } else {
+                        theme.primary
+                    }))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_sm()
+                                    .when(!version.auto, |d| d.font_weight(FontWeight::MEDIUM))
+                                    .child(version.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{when} · {}", version.author)),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .invisible()
+                            .group_hover(group, |s| s.visible())
+                            .child(
+                                Button::new(SharedString::from(format!("restore-{id}")))
+                                    .icon(Icon::new(Lucide::Undo2))
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Restore this version")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.apply(window, cx, |e| e.restore_version(id));
+                                    })),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("delete-version-{id}")))
+                                    .icon(Icon::new(Lucide::Trash))
+                                    .ghost()
+                                    .xsmall()
+                                    .tooltip("Delete version")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.apply(window, cx, |e| {
+                                            e.versions.as_mut().map_or(Ok(()), |v| v.delete(id))
+                                        });
+                                    })),
+                            ),
+                    ),
+            );
+        }
+        list.into_any_element()
+    }
+
     fn render_assets(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let mut presets = div().flex().flex_wrap().gap_1p5();
@@ -701,6 +804,13 @@ impl Studio {
                 .overflow_y_scrollbar()
                 .child(self.render_variables(cx))
                 .into_any_element(),
+            LeftTab::History => div()
+                .id("history-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .child(self.render_history(cx))
+                .into_any_element(),
         };
         v_flex()
             .size_full()
@@ -711,21 +821,24 @@ impl Studio {
                 div().p_2().child(
                     TabBar::new("left-tabs")
                         .segmented()
-                        .small()
+                        .xsmall()
                         .w_full()
                         .selected_index(match tab {
                             LeftTab::Layers => 0,
                             LeftTab::Assets => 1,
                             LeftTab::Variables => 2,
+                            LeftTab::History => 3,
                         })
                         .child(Tab::new().label("Layers"))
                         .child(Tab::new().label("Assets"))
                         .child(Tab::new().label("Variables"))
+                        .child(Tab::new().label("History"))
                         .on_click(cx.listener(|this, index: &usize, _, cx| {
                             this.left_tab = match *index {
                                 0 => LeftTab::Layers,
                                 1 => LeftTab::Assets,
-                                _ => LeftTab::Variables,
+                                2 => LeftTab::Variables,
+                                _ => LeftTab::History,
                             };
                             cx.notify();
                         })),

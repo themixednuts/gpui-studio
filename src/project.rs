@@ -149,6 +149,43 @@ impl Project {
         Ok((project, doc))
     }
 
+    /// Every file a save would write, keyed by project-relative path.
+    pub fn snapshot(&self, doc: &Document) -> Result<BTreeMap<String, String>> {
+        let mut files = BTreeMap::new();
+        files.insert(MANIFEST.to_owned(), self.manifest_text(doc)?);
+        for artboard in doc.artboards() {
+            if !valid_file_name(&artboard.file) {
+                bail!("invalid artboard file name {:?}", artboard.file);
+            }
+            files.insert(
+                format!("{ARTBOARDS}/{}", artboard.file),
+                artboard_document(doc, artboard.root),
+            );
+        }
+        Ok(files)
+    }
+
+    /// Load a document from snapshot files (see [`Project::snapshot`]).
+    pub fn document_from_snapshot(files: &BTreeMap<String, String>) -> Result<Document> {
+        let dir = tempfile::tempdir()?;
+        for (path, text) in files {
+            let valid = path == MANIFEST
+                || path
+                    .strip_prefix(&format!("{ARTBOARDS}/"))
+                    .is_some_and(valid_file_name);
+            if !valid {
+                bail!("unexpected file {path:?} in version");
+            }
+            let target = dir.path().join(path);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(target, text)?;
+        }
+        let (_, doc) = Self::open(dir.path())?;
+        Ok(doc)
+    }
+
     /// Read the manifest and every artboard from disk.
     pub fn load(&mut self) -> Result<Document> {
         let manifest_text = read_bounded(&self.root.join(MANIFEST))?;

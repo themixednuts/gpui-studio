@@ -20,4 +20,5 @@ pub mod presets;
 pub mod project;
 pub mod shapes;
 pub mod ui;
+pub mod versions;
 pub mod workspace;

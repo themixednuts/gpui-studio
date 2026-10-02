@@ -19,6 +19,11 @@ use crate::presets;
 use crate::project::Project;
 
 const AUTOSAVE_QUIET: Duration = Duration::from_millis(400);
+/// How often editing records an automatic version.
+const CHECKPOINT_EVERY: Duration = Duration::from_secs(10 * 60);
+/// An agent edit after this much agent silence starts a new batch, which is
+/// preceded by an automatic version.
+const AGENT_BATCH_GAP: Duration = Duration::from_secs(120);
 
 /// Canvas tools.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +137,11 @@ pub struct Editor {
     pub measured: HashMap<NodeId, Rect>,
     /// Chat, agent presence, and activity.
     pub collab: crate::collab::Collab,
+    /// Version history (projects only).
+    pub versions: Option<crate::versions::Versions>,
+    last_checkpoint: Instant,
+    checkpoint_revision: u64,
+    last_agent_edit: Option<Instant>,
     dirty: bool,
     last_edit: Instant,
 }
@@ -151,6 +161,10 @@ impl Editor {
             status: "Ready".to_owned(),
             measured: HashMap::new(),
             collab: crate::collab::Collab::default(),
+            versions: None,
+            last_checkpoint: Instant::now(),
+            checkpoint_revision: 1,
+            last_agent_edit: None,
             dirty: false,
             last_edit: Instant::now(),
         }
@@ -165,9 +179,13 @@ impl Editor {
         let comments = Comments::load(&project.studio_dir())?;
         let mut editor = Self::new(doc);
         editor.collab = crate::collab::Collab::load(&project.studio_dir());
+        editor.versions = Some(crate::versions::Versions::load(&project.studio_dir()));
         editor.status = format!("Opened {}", project.root().display());
         editor.project = Some(project);
         editor.comments = Some(comments);
+        if let Err(error) = editor.checkpoint("Opened", "You", true) {
+            eprintln!("version checkpoint failed: {error:#}");
+        }
         Ok(editor)
     }
 
@@ -271,6 +289,14 @@ impl Editor {
 
     /// Save when edits have been quiet long enough. Returns whether it saved.
     pub fn autosave(&mut self) -> bool {
+        if self.revision != self.checkpoint_revision
+            && self.last_checkpoint.elapsed() >= CHECKPOINT_EVERY
+            && self.last_edit.elapsed() >= AUTOSAVE_QUIET
+        {
+            if let Err(error) = self.checkpoint("Autosave", "You", true) {
+                self.status = format!("Version checkpoint failed: {error:#}");
+            }
+        }
         if let Err(error) = self.collab.save() {
             self.status = format!("Saving chat failed: {error:#}");
         }
@@ -1381,6 +1407,60 @@ impl Editor {
         })
     }
 
+    /// Record a version of the current design. Returns `None` when nothing
+    /// changed since the last automatic version (or there is no project).
+    pub fn checkpoint(
+        &mut self,
+        name: &str,
+        author: &str,
+        auto: bool,
+    ) -> Result<Option<crate::versions::VersionMeta>> {
+        let (Some(project), Some(versions)) = (&self.project, &mut self.versions) else {
+            return Ok(None);
+        };
+        let files = project.snapshot(&self.doc)?;
+        let saved = versions.save(files, name, author, auto)?;
+        self.last_checkpoint = Instant::now();
+        self.checkpoint_revision = self.revision;
+        Ok(saved)
+    }
+
+    /// Before an agent's first edit after a pause, record a version so the
+    /// person can roll back the agent's whole batch at once.
+    pub fn checkpoint_before_agent(&mut self, agent: &str) {
+        let new_batch = self
+            .last_agent_edit
+            .is_none_or(|at| at.elapsed() >= AGENT_BATCH_GAP);
+        self.last_agent_edit = Some(Instant::now());
+        if new_batch
+            && let Err(error) = self.checkpoint(&format!("Before {agent}'s edits"), agent, true)
+        {
+            self.status = format!("Version checkpoint failed: {error:#}");
+        }
+    }
+
+    /// Restore a version as one undoable step (the current design is saved as
+    /// a version first).
+    pub fn restore_version(&mut self, id: u64) -> Result<()> {
+        let versions = self.versions.as_ref().context("no version history")?;
+        let name = versions
+            .list()
+            .iter()
+            .find(|v| v.id == id)
+            .map(|v| v.name.clone())
+            .with_context(|| format!("no version {id}"))?;
+        let files = versions.files(id)?;
+        let restored = Project::document_from_snapshot(&files)?;
+        self.checkpoint(&format!("Before restoring \"{name}\""), "You", true)?;
+        self.edit(None, |doc| {
+            *doc = restored;
+            Ok(())
+        })?;
+        self.page = self.page.min(self.doc.pages.len().saturating_sub(1));
+        self.status = format!("Restored \"{name}\"");
+        Ok(())
+    }
+
     /// Create or update a design variable. Returns its normalized name.
     pub fn set_variable(&mut self, name: &str, value: &str) -> Result<String> {
         let name = crate::model::variables::normalize_name(name)
@@ -1636,6 +1716,53 @@ mod tests {
         assert!(editor.doc.variables.is_empty());
         assert!(editor.undo());
         assert!(editor.doc.variables.contains_key("primary"));
+    }
+
+    #[test]
+    fn versions_checkpoint_and_restore_as_one_undo_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = Editor::open(dir.path()).unwrap();
+        assert_eq!(editor.versions.as_ref().unwrap().list()[0].name, "Opened");
+        let board = editor.doc.pages[0].artboards[0].root;
+        let saved = editor
+            .checkpoint("Approved", "You", false)
+            .unwrap()
+            .unwrap();
+        editor
+            .set_styles(
+                &[board],
+                &[("background-color".into(), Some("#000000".into()))],
+                None,
+            )
+            .unwrap();
+        // An agent's first edit in a while records a version first.
+        editor.checkpoint_before_agent("Claude");
+        assert_eq!(
+            editor.versions.as_ref().unwrap().list()[0].name,
+            "Before Claude's edits"
+        );
+        editor.checkpoint_before_agent("Claude");
+        assert_eq!(
+            editor.versions.as_ref().unwrap().list()[0].name,
+            "Before Claude's edits",
+            "the same batch does not checkpoint again"
+        );
+        editor.restore_version(saved.id).unwrap();
+        assert_ne!(
+            editor.doc.get(board).unwrap().style.get("background-color"),
+            Some("#000000")
+        );
+        // The pre-restore state is kept (deduplicated against the agent checkpoint).
+        assert_eq!(
+            editor.versions.as_ref().unwrap().list()[0].name,
+            "Before Claude's edits"
+        );
+        assert!(editor.undo());
+        assert_eq!(
+            editor.doc.get(board).unwrap().style.get("background-color"),
+            Some("#000000")
+        );
+        assert!(editor.restore_version(42).is_err());
     }
 
     #[test]

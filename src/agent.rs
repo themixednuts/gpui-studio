@@ -539,6 +539,32 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: false,
     },
     CommandSpec {
+        name: "list_versions",
+        title: "List versions",
+        description: "The project's version history, newest first: named versions and automatic checkpoints (including one before each batch of agent edits).",
+        schema: || object(json!({}), &[]),
+        mutating: false,
+    },
+    CommandSpec {
+        name: "save_version",
+        title: "Save version",
+        description: "Record a named version of the whole design, e.g. before a risky change or when the person approves something.",
+        schema: || object(json!({ "name": { "type": "string" } }), &["name"]),
+        mutating: false,
+    },
+    CommandSpec {
+        name: "restore_version",
+        title: "Restore version",
+        description: "Restore the design to a version (the current state is checkpointed first, and the restore is undoable).",
+        schema: || {
+            object(
+                json!({ "version_id": { "type": "integer" } }),
+                &["version_id"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
         name: "list_links",
         title: "List prototype links",
         description: "Prototype links on the current page: which layer navigates to which artboard (or back) and with what transition.",
@@ -955,6 +981,10 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
             "The person paused agent edits. Ask them in chat with send_message, then try again later.".into(),
         ));
     }
+    if mutating {
+        let agent = editor.collab.agent_name().to_owned();
+        editor.checkpoint_before_agent(&agent);
+    }
     let person = editor.selection.clone();
     let page = editor.page;
     let revision = editor.revision;
@@ -1198,6 +1228,37 @@ fn execute_command(editor: &mut Editor, name: &str, arguments: Value) -> Result<
         "export_image" => Err(AgentError::Invalid(
             "export_image needs the Studio window to lay the layer out".into(),
         )),
+        "list_versions" => Ok(Value::Array(
+            editor
+                .versions
+                .as_ref()
+                .map(|v| v.list().to_vec())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|v| json!({ "id": v.id, "name": v.name, "author": v.author, "auto": v.auto }))
+                .collect(),
+        )),
+        "save_version" => {
+            #[derive(Deserialize)]
+            struct A {
+                name: String,
+            }
+            let a: A = args(arguments)?;
+            let agent = editor.collab.agent_name().to_owned();
+            let saved = editor
+                .checkpoint(&a.name, &agent, false)?
+                .ok_or_else(|| AgentError::Invalid("versions need a saved project".into()))?;
+            Ok(json!({ "id": saved.id, "name": saved.name }))
+        }
+        "restore_version" => {
+            #[derive(Deserialize)]
+            struct A {
+                version_id: u64,
+            }
+            let a: A = args(arguments)?;
+            editor.restore_version(a.version_id)?;
+            Ok(json!({ "revision": editor.revision }))
+        }
         "list_links" => {
             use crate::model::prototype::LinkTarget;
             let doc = &editor.doc;

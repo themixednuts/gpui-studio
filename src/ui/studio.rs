@@ -33,6 +33,7 @@ pub(crate) enum LeftTab {
     Layers,
     Assets,
     Variables,
+    History,
 }
 
 /// Which tab the right sidebar shows.
