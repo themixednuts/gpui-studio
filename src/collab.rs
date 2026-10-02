@@ -116,6 +116,21 @@ pub struct Presence {
     pub at: u64,
 }
 
+/// A labelled mark an agent puts on layers (follows them as layout changes).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Annotation {
+    /// Agent-chosen key (re-using it replaces the annotation).
+    pub key: String,
+    /// Marked layers.
+    pub nodes: Vec<NodeId>,
+    /// Short label.
+    pub label: String,
+    /// CSS color.
+    pub color: String,
+    /// Who added it.
+    pub agent: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Stored {
     messages: Vec<Message>,
@@ -129,6 +144,7 @@ pub struct Collab {
     messages: Vec<Message>,
     activity: Vec<Activity>,
     presence: BTreeMap<String, Presence>,
+    annotations: Vec<Annotation>,
     next_id: u64,
     /// Highest person-message id an agent has read.
     agent_read: u64,
@@ -330,6 +346,28 @@ impl Collab {
                 .collect();
         }
         entry.at = now_ms();
+    }
+
+    /// Add or replace (by key) an annotation. At most 64 are kept.
+    pub fn annotate(&mut self, annotation: Annotation) {
+        self.annotations.retain(|a| a.key != annotation.key);
+        self.annotations.push(annotation);
+        if self.annotations.len() > 64 {
+            self.annotations.remove(0);
+        }
+    }
+
+    /// Remove annotations by key, or all of them.
+    pub fn clear_annotations(&mut self, key: Option<&str>) -> usize {
+        let before = self.annotations.len();
+        self.annotations.retain(|a| key.is_some_and(|k| a.key != k));
+        before - self.annotations.len()
+    }
+
+    /// Current annotations.
+    #[must_use]
+    pub fn annotations(&self) -> &[Annotation] {
+        &self.annotations
     }
 
     /// Remove an agent's presence.

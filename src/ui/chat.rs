@@ -94,6 +94,56 @@ impl Studio {
             .collect()
     }
 
+    /// Annotations to draw: (label, color, window bounds).
+    pub(crate) fn annotation_overlays(&self) -> Vec<(String, Hsla, Vec<gpui_kit::Bounds<Pixels>>)> {
+        self.editor
+            .collab
+            .annotations()
+            .iter()
+            .map(|a| {
+                let color = crate::model::Color::parse_loose(&a.color)
+                    .map_or(AGENT_COLOR, super::paint::hsla);
+                let bounds = a
+                    .nodes
+                    .iter()
+                    .filter_map(|id| self.canvas.layout.borrow().get(id).copied())
+                    .collect();
+                (a.label.clone(), color, bounds)
+            })
+            .collect()
+    }
+
+    /// Labels for annotations, positioned in canvas space.
+    pub(crate) fn render_annotation_tags(&self, origin: Point<Pixels>) -> Vec<AnyElement> {
+        self.annotation_overlays()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, (label, color, bounds))| {
+                let first = bounds.first()?;
+                let local = first.origin - origin;
+                Some(
+                    div()
+                        .id(SharedString::from(format!("annotation-{index}")))
+                        .role(gpui_kit::Role::Note)
+                        .aria_label(label.clone())
+                        .absolute()
+                        .left(local.x + first.size.width - px(4.0))
+                        .top(local.y - px(10.0))
+                        .max_w(px(260.0))
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded(px(5.0))
+                        .bg(color)
+                        .text_color(gpui_kit::white())
+                        .text_xs()
+                        .shadow_md()
+                        .child(label)
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
     /// Name tags above each agent's focus, positioned in canvas space.
     pub(crate) fn render_presence_tags(&self, origin: Point<Pixels>) -> Vec<AnyElement> {
         self.presence_overlays()

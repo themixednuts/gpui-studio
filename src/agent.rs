@@ -491,6 +491,31 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: false,
     },
     CommandSpec {
+        name: "annotate",
+        title: "Annotate layers",
+        description: "Point something out on the canvas: a labelled, colored outline on layers that follows them as the layout changes (not saved in the design). Reusing a key replaces that annotation. Prefer this over gpui-mcp highlight_elements for design feedback; use add_comment for feedback that should persist.",
+        schema: || {
+            object(
+                json!({
+                    "node_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "label": { "type": "string" },
+                    "color": { "type": "string", "description": "CSS color (default #f97316)." },
+                    "key": { "type": "string", "description": "Stable key to update or clear this annotation later." },
+                    "agent": { "type": "string" }
+                }),
+                &["node_ids", "label"],
+            )
+        },
+        mutating: false,
+    },
+    CommandSpec {
+        name: "clear_annotations",
+        title: "Clear annotations",
+        description: "Remove one annotation by key, or all annotations.",
+        schema: || object(json!({ "key": { "type": "string" } }), &[]),
+        mutating: false,
+    },
+    CommandSpec {
         name: "get_activity",
         title: "Get activity",
         description: "Recent agent edits with document revisions, plus whether the person has paused agent edits.",
@@ -1107,6 +1132,50 @@ fn execute_command(editor: &mut Editor, name: &str, arguments: Value) -> Result<
                 editor.collab.set_presence(&agent, ids, a.status);
             }
             Ok(json!({ "agent": agent }))
+        }
+        "annotate" => {
+            #[derive(Deserialize)]
+            struct A {
+                node_ids: Vec<String>,
+                label: String,
+                color: Option<String>,
+                key: Option<String>,
+                agent: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            editor.collab.introduce(a.agent.as_deref());
+            let ids = nodes(editor, &a.node_ids)?;
+            if ids.is_empty() {
+                return Err(AgentError::Invalid("node_ids is empty".into()));
+            }
+            let color = a.color.unwrap_or_else(|| "#f97316".to_owned());
+            if crate::model::Color::parse_loose(&color).is_none() {
+                return Err(AgentError::Invalid(format!("invalid color {color:?}")));
+            }
+            let key = a
+                .key
+                .unwrap_or_else(|| format!("a{}", editor.collab.annotations().len() + 1));
+            editor.collab.annotate(crate::collab::Annotation {
+                key: key.clone(),
+                nodes: ids,
+                label: a
+                    .label
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(120)
+                    .collect(),
+                color,
+                agent: editor.collab.agent_name().to_owned(),
+            });
+            Ok(json!({ "key": key }))
+        }
+        "clear_annotations" => {
+            #[derive(Deserialize)]
+            struct A {
+                key: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            Ok(json!({ "removed": editor.collab.clear_annotations(a.key.as_deref()) }))
         }
         "get_activity" => {
             #[derive(Deserialize)]
@@ -2279,6 +2348,33 @@ mod tests {
             .is_ok()
         );
         editor.collab.paused = false;
+
+        // Annotations follow layers and can be cleared by key.
+        execute(&mut editor, "annotate", json!({ "node_ids": [desktop.to_string()], "label": "Low contrast", "key": "contrast" })).unwrap();
+        execute(
+            &mut editor,
+            "annotate",
+            json!({ "node_ids": [mobile.to_string()], "label": "Too tight", "color": "#e11d48" }),
+        )
+        .unwrap();
+        assert!(
+            execute(
+                &mut editor,
+                "annotate",
+                json!({ "node_ids": [desktop.to_string()], "label": "x", "color": "nope" })
+            )
+            .is_err()
+        );
+        assert_eq!(editor.collab.annotations().len(), 2);
+        execute(
+            &mut editor,
+            "clear_annotations",
+            json!({ "key": "contrast" }),
+        )
+        .unwrap();
+        assert_eq!(editor.collab.annotations()[0].label, "Too tight");
+        execute(&mut editor, "clear_annotations", json!({})).unwrap();
+        assert!(editor.collab.annotations().is_empty());
 
         // Following: the agent's selection becomes the person's.
         editor.collab.follow = true;

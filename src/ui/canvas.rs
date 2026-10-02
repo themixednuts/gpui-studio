@@ -2357,6 +2357,12 @@ impl Studio {
             .flat_map(|(_, _, bounds)| bounds)
             .collect();
         let presence_tags = self.render_presence_tags(self.canvas.origin());
+        let annotations: Vec<(Hsla, Vec<Bounds<Pixels>>)> = self
+            .annotation_overlays()
+            .into_iter()
+            .map(|(_, color, bounds)| (color, bounds))
+            .collect();
+        let annotation_tags = self.render_annotation_tags(self.canvas.origin());
         let prototyping = self.right_tab == RightTab::Prototype;
         let flows = if prototyping {
             self.flow_paths()
@@ -2454,6 +2460,18 @@ impl Studio {
                                 ));
                             }
                         }
+                    }
+                }
+                for (color, bounds) in &annotations {
+                    for b in bounds {
+                        window.paint_quad(quad(
+                            *b,
+                            px(3.0),
+                            color.opacity(0.08),
+                            px(2.0),
+                            *color,
+                            BorderStyle::Dashed,
+                        ));
                     }
                 }
                 for b in &presences {
@@ -2828,6 +2846,7 @@ impl Studio {
             .children(size_label)
             .children(connection_labels)
             .children(presence_tags)
+            .children(annotation_tags)
             .children(pins)
             .when(self.editor.doc.artboards().next().is_none(), |this| {
                 this.child(
