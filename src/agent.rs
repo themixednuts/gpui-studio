@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::comments::CommentStatus;
 use crate::editor::{Editor, InsertTarget};
 use crate::export::{CodeFormat, export};
+use crate::geometry::{Align, Axis};
 use crate::model::html::{ImportOptions, artboard_document, parse_document};
 use crate::model::{ArrowHeads, ConnectorStyle, Endpoint, NodeId, NodeKind};
 use crate::presets::{COMPONENTS, starter_document};
@@ -382,6 +383,54 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: true,
     },
     CommandSpec {
+        name: "import_image",
+        title: "Import image",
+        description: "Copy a local image file (png, jpg, gif, webp, svg, bmp) into the project's artboards/assets/ and place it as an <img> layer: inside parent_id (absolutely at x/y in block flow, or at index in flex/grid), or as a new artboard at canvas x/y when parent_id is omitted.",
+        schema: || {
+            object(
+                json!({
+                    "path": { "type": "string", "description": "Absolute path of the image file." },
+                    "parent_id": { "type": "string", "description": NODE },
+                    "x": { "type": "number" },
+                    "y": { "type": "number" },
+                    "index": { "type": "integer", "minimum": 0 }
+                }),
+                &["path"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "align_nodes",
+        title: "Align nodes",
+        description: "Align artboards or absolutely positioned layers to each other (or one layer to its parent) using their rendered bounds.",
+        schema: || {
+            object(
+                json!({
+                    "node_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "align": { "type": "string", "enum": ["left", "center", "right", "top", "middle", "bottom"] }
+                }),
+                &["node_ids", "align"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
+        name: "distribute_nodes",
+        title: "Distribute nodes",
+        description: "Space three or more artboards or absolutely positioned layers evenly along an axis.",
+        schema: || {
+            object(
+                json!({
+                    "node_ids": { "type": "array", "items": { "type": "string" }, "minItems": 3 },
+                    "axis": { "type": "string", "enum": ["horizontal", "vertical"] }
+                }),
+                &["node_ids", "axis"],
+            )
+        },
+        mutating: true,
+    },
+    CommandSpec {
         name: "undo",
         title: "Undo",
         description: "Undo the last edit.",
@@ -617,6 +666,14 @@ struct NodesArg {
     node_ids: Vec<String>,
 }
 
+/// Rendered bounds in document pixels, when the canvas has laid the node out.
+fn bounds_json(editor: &Editor, id: NodeId) -> Value {
+    editor.measured.get(&id).map_or(
+        Value::Null,
+        |r| json!({ "x": r.x, "y": r.y, "width": r.w, "height": r.h }),
+    )
+}
+
 /// Execute one command.
 pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Value, AgentError> {
     match name {
@@ -625,7 +682,84 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
         "get_node" => {
             let a: NodeArg = args(arguments)?;
             let id = node(editor, &a.node_id)?;
-            Ok(json!({ "id": id.to_string(), "html": editor.html_of(id, true) }))
+            Ok(
+                json!({ "id": id.to_string(), "html": editor.html_of(id, true), "bounds": bounds_json(editor, id) }),
+            )
+        }
+        "import_image" => {
+            #[derive(Deserialize)]
+            struct A {
+                path: String,
+                parent_id: Option<String>,
+                x: Option<f32>,
+                y: Option<f32>,
+                index: Option<usize>,
+            }
+            let a: A = args(arguments)?;
+            let path = std::path::Path::new(&a.path);
+            if !crate::assets::is_image_path(path) {
+                return Err(AgentError::Invalid(
+                    "path must be a png, jpg, gif, webp, svg, or bmp file".into(),
+                ));
+            }
+            let size = std::fs::metadata(path)
+                .map_err(|e| AgentError::Invalid(format!("cannot read {}: {e}", a.path)))?
+                .len();
+            if size > crate::assets::MAX_IMAGE_BYTES as u64 {
+                return Err(AgentError::Invalid(
+                    "images larger than 32 MB are not imported".into(),
+                ));
+            }
+            let bytes = std::fs::read(path)
+                .map_err(|e| AgentError::Invalid(format!("cannot read {}: {e}", a.path)))?;
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image.png")
+                .to_owned();
+            let parent = a.parent_id.map(|id| node(editor, &id)).transpose()?;
+            let at = match (a.x, a.y) {
+                (Some(x), Some(y)) => Some((x, y)),
+                _ => None,
+            };
+            let id = editor.import_image(
+                &bytes,
+                &name,
+                crate::editor::ImagePlacement {
+                    parent,
+                    at,
+                    index: a.index,
+                },
+            )?;
+            Ok(
+                json!({ "id": id.to_string(), "html": editor.html_of(id, true), "revision": editor.revision }),
+            )
+        }
+        "align_nodes" => {
+            #[derive(Deserialize)]
+            struct A {
+                node_ids: Vec<String>,
+                align: String,
+            }
+            let a: A = args(arguments)?;
+            let ids = nodes(editor, &a.node_ids)?;
+            let align = Align::parse(&a.align)
+                .ok_or_else(|| AgentError::Invalid(format!("unknown align {:?}", a.align)))?;
+            let moved = editor.align(&ids, align)?;
+            Ok(json!({ "moved": moved, "revision": editor.revision }))
+        }
+        "distribute_nodes" => {
+            #[derive(Deserialize)]
+            struct A {
+                node_ids: Vec<String>,
+                axis: String,
+            }
+            let a: A = args(arguments)?;
+            let ids = nodes(editor, &a.node_ids)?;
+            let axis = Axis::parse(&a.axis)
+                .ok_or_else(|| AgentError::Invalid(format!("unknown axis {:?}", a.axis)))?;
+            let moved = editor.distribute(&ids, axis)?;
+            Ok(json!({ "moved": moved, "revision": editor.revision }))
         }
         "get_tree" => {
             #[derive(Deserialize)]
@@ -1283,5 +1417,83 @@ mod tests {
         let root = apply_live_html(&mut editor, &edited).unwrap();
         assert_eq!(editor.doc.pages[0].artboards[0].root, root);
         assert!(live_html(&editor).contains("Edited live."));
+    }
+
+    #[test]
+    fn agent_aligns_and_distributes_with_measured_bounds() {
+        let mut editor = demo_editor();
+        let board = editor.doc.pages[0].artboards[0].root;
+        let ids = editor
+            .insert_html(
+                "<div style=\"position: absolute; left: 10px; top: 0px; width: 20px; height: 20px\"></div>\
+                 <div style=\"position: absolute; left: 50px; top: 30px; width: 40px; height: 10px\"></div>\
+                 <div style=\"position: absolute; left: 200px; top: 5px; width: 20px; height: 20px\"></div>",
+                InsertTarget {
+                    parent: Some(board),
+                    index: None,
+                },
+            )
+            .unwrap();
+        // Without a rendered layout there is nothing to align against.
+        let names: Vec<String> = ids.iter().map(ToString::to_string).collect();
+        assert!(
+            execute(
+                &mut editor,
+                "align_nodes",
+                json!({ "node_ids": names, "align": "top" })
+            )
+            .is_err()
+        );
+        let rects = [
+            (10.0, 0.0, 20.0, 20.0),
+            (50.0, 30.0, 40.0, 10.0),
+            (200.0, 5.0, 20.0, 20.0),
+        ];
+        editor
+            .measured
+            .insert(board, crate::geometry::Rect::new(0.0, 0.0, 1440.0, 900.0));
+        for (id, (x, y, w, h)) in ids.iter().zip(rects) {
+            editor
+                .measured
+                .insert(*id, crate::geometry::Rect::new(x, y, w, h));
+        }
+        let out = execute(
+            &mut editor,
+            "align_nodes",
+            json!({ "node_ids": names, "align": "bottom" }),
+        )
+        .unwrap();
+        assert_eq!(out["moved"], 2);
+        let top = |editor: &Editor, i: usize| {
+            editor
+                .doc
+                .get(ids[i])
+                .unwrap()
+                .style
+                .get("top")
+                .map(ToOwned::to_owned)
+        };
+        assert_eq!(top(&editor, 0).as_deref(), Some("20px"));
+        assert_eq!(top(&editor, 1).as_deref(), Some("30px"));
+        execute(
+            &mut editor,
+            "distribute_nodes",
+            json!({ "node_ids": names, "axis": "horizontal" }),
+        )
+        .unwrap();
+        assert_eq!(
+            editor.doc.get(ids[1]).unwrap().style.get("left"),
+            Some("95px")
+        );
+        assert!(
+            execute(
+                &mut editor,
+                "distribute_nodes",
+                json!({ "node_ids": names, "axis": "diagonal" })
+            )
+            .is_err()
+        );
+        let node = execute(&mut editor, "get_node", json!({ "node_id": names[2] })).unwrap();
+        assert_eq!(node["bounds"]["width"], 20.0);
     }
 }

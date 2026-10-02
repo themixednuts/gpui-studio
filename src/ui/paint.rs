@@ -624,6 +624,13 @@ impl Painter<'_> {
         if c.height != Length::Auto {
             image = image.h_full();
         }
+        // The box's radii clip its image, as in a browser.
+        let [tl, tr, br, bl] = c.resolved_radii(c.width.px(), c.height.px());
+        image = image
+            .rounded_tl(self.px(tl))
+            .rounded_tr(self.px(tr))
+            .rounded_br(self.px(br))
+            .rounded_bl(self.px(bl));
         image.into_any_element()
     }
 

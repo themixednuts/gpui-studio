@@ -23,6 +23,7 @@ use super::inspector::Inspector;
 use super::paint::FontBook;
 use crate::editor::{Editor, Tool};
 use crate::export::CodeFormat;
+use crate::geometry::{Align, Axis};
 use crate::model::NodeId;
 use crate::workspace::{PanelLayout, ViewState};
 
@@ -67,6 +68,8 @@ pub(crate) struct Studio {
     /// Connector selected on the canvas (separate from layer selection).
     pub(crate) selected_connection: Option<u64>,
     pub(crate) panels: PanelLayout,
+    /// Pending drop target while dragging a row in the layer list.
+    pub(crate) layer_drop: Option<(NodeId, crate::editor::DropPosition)>,
     panel_drag: Option<(PanelSide, f32, f32)>,
     shown_status: String,
     pub(crate) _subscriptions: Vec<Subscription>,
@@ -112,6 +115,7 @@ impl Studio {
             show_done_comments: false,
             selected_connection: None,
             panels: panels.clamped(),
+            layer_drop: None,
             panel_drag: None,
             shown_status: String::new(),
             _subscriptions: Vec::new(),
@@ -179,6 +183,7 @@ impl Studio {
         cx: &mut Context<Self>,
         op: impl FnOnce(&mut Editor) -> anyhow::Result<R>,
     ) -> Option<R> {
+        self.editor.measured = self.canvas.measured();
         let result = op(&mut self.editor);
         self.inspector.invalidate();
         cx.notify();
@@ -189,6 +194,37 @@ impl Studio {
                 None
             }
         }
+    }
+
+    /// Align the selection (to each other, or one layer to its parent).
+    pub(crate) fn align(&mut self, align: Align, window: &mut Window, cx: &mut Context<Self>) {
+        let selection = self.editor.selection.clone();
+        self.apply(window, cx, |e| e.align(&selection, align));
+    }
+
+    /// Space the selection evenly.
+    pub(crate) fn distribute(&mut self, axis: Axis, window: &mut Window, cx: &mut Context<Self>) {
+        let selection = self.editor.selection.clone();
+        self.apply(window, cx, |e| e.distribute(&selection, axis));
+    }
+
+    /// Pick image files and place them into the selection (or as artboards).
+    pub(crate) fn prompt_place_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Place image".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    let images = Self::read_image_files(&paths);
+                    this.import_images(images, None, window, cx);
+                });
+            }
+        })
+        .detach();
     }
 
     pub(crate) fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
@@ -254,6 +290,16 @@ impl Studio {
             .child(tool("tool-arrow", Lucide::MoveUpRight, Tool::Arrow, cx))
             .child(tool("tool-connector", Lucide::Spline, Tool::Connector, cx))
             .child(divider())
+            .child(
+                Button::new("tool-image")
+                    .icon(Icon::new(Lucide::Image))
+                    .ghost()
+                    .small()
+                    .tooltip("Place image… (⇧⌘K)")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.prompt_place_image(window, cx)),
+                    ),
+            )
             .child(tool(
                 "tool-comment",
                 Lucide::MessageSquare,
@@ -410,6 +456,9 @@ impl Studio {
 impl Render for Studio {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_inspector(window, cx);
+        if self.layer_drop.is_some() && !cx.has_active_drag() {
+            self.layer_drop = None;
+        }
         let visible = self.panels.panels_visible;
         let left = visible.then(|| self.render_left_panel(window, cx));
         let right = visible.then(|| self.render_right_panel(window, cx));

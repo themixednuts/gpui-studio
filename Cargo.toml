@@ -17,6 +17,7 @@ ego-tree = "0.11"
 gpui-kit = "=0.7.0"
 # GPUI Kit runs on gpui-pre, so the bridge uses its gpui-pre backend.
 gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da", default-features = false, features = ["gpui-pre"] }
+imagesize = "0.15.0"
 notify = "8.2.0"
 ron = "0.12.2"
 scraper = { version = "0.27", default-features = false }

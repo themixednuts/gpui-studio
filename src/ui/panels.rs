@@ -8,17 +8,41 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, ClickEvent, ClipboardItem, Context, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, ClipboardItem, Context, DragMoveEvent, FontWeight,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::*, px,
 };
 
 use super::{LeftTab, RightTab, Studio};
 use crate::comments::CommentStatus;
+use crate::editor::DropPosition;
 use crate::export::{CodeFormat, export};
 use crate::model::style::Display;
 use crate::model::{NodeId, NodeKind};
 use crate::presets::{ARTBOARD_PRESETS, COMPONENTS};
+
+/// A layer row being dragged in the layer list.
+#[derive(Clone)]
+pub(crate) struct DraggedLayer {
+    id: NodeId,
+    name: SharedString,
+}
+
+impl Render for DraggedLayer {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .px_2()
+            .py_1()
+            .rounded(px(6.0))
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.primary)
+            .shadow_md()
+            .text_xs()
+            .child(self.name.clone())
+    }
+}
 
 struct LayerRow {
     id: NodeId,
@@ -286,9 +310,15 @@ impl Studio {
                 .filter(|(rid, _)| *rid == id)
                 .map(|(_, input)| input.clone());
             let group: SharedString = format!("layer-{id}").into();
+            let renaming_none = renaming.is_none();
+            let drop_here = self
+                .layer_drop
+                .filter(|(target, _)| *target == id)
+                .map(|(_, position)| position);
             list = list.child(
                 h_flex()
                     .id(SharedString::from(format!("layer-row-{id}")))
+                    .relative()
                     .group(group.clone())
                     .h(px(26.0))
                     .mx_1p5()
@@ -391,6 +421,74 @@ impl Studio {
                                     })),
                             ),
                     )
+                    .when(renaming_none, |this| {
+                        this.on_drag(
+                            DraggedLayer {
+                                id,
+                                name: self.editor.doc.display_name(id).into(),
+                            },
+                            |dragged, _, _, cx| cx.new(|_| dragged.clone()),
+                        )
+                    })
+                    .on_drag_move(cx.listener(
+                        move |this, event: &DragMoveEvent<DraggedLayer>, _, cx| {
+                            if !event.bounds.contains(&event.event.position) {
+                                return;
+                            }
+                            let dragged = event.drag(cx).id;
+                            let fraction = ((event.event.position.y - event.bounds.origin.y)
+                                / event.bounds.size.height)
+                                .clamp(0.0, 1.0);
+                            let inside_ok =
+                                this.editor
+                                    .can_drop_layer(dragged, id, DropPosition::Inside);
+                            let position = if inside_ok && (0.25..=0.75).contains(&fraction) {
+                                DropPosition::Inside
+                            } else if fraction < 0.5 {
+                                DropPosition::Before
+                            } else {
+                                DropPosition::After
+                            };
+                            let next = this
+                                .editor
+                                .can_drop_layer(dragged, id, position)
+                                .then_some((id, position));
+                            if this.layer_drop != next {
+                                this.layer_drop = next;
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_drop(
+                        cx.listener(move |this, dragged: &DraggedLayer, window, cx| {
+                            let Some((target, position)) = this.layer_drop.take() else {
+                                return;
+                            };
+                            let dragged = dragged.id;
+                            this.apply(window, cx, |e| e.drop_layer(dragged, target, position));
+                        }),
+                    )
+                    .when_some(drop_here, |this, position| {
+                        let line = |top: bool| {
+                            div()
+                                .absolute()
+                                .left(px(4.0 + row.depth as f32 * 12.0))
+                                .right_0()
+                                .h(px(2.0))
+                                .rounded(px(1.0))
+                                .bg(theme.primary)
+                                .when(top, |l| l.top(px(-1.0)))
+                                .when(!top, |l| l.bottom(px(-1.0)))
+                        };
+                        match position {
+                            DropPosition::Before => this.child(line(true)),
+                            DropPosition::After => this.child(line(false)),
+                            DropPosition::Inside => this
+                                .border_1()
+                                .border_color(theme.primary)
+                                .bg(theme.primary.opacity(0.1)),
+                        }
+                    })
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         if event.click_count() >= 2 {
                             this.begin_rename(id, window, cx);

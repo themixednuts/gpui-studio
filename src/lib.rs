@@ -7,9 +7,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod agent;
+pub mod assets;
 pub mod comments;
 pub mod editor;
 pub mod export;
+pub mod geometry;
 pub mod history;
 pub mod model;
 pub mod presets;

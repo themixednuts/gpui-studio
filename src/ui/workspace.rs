@@ -355,6 +355,7 @@ impl Workspace {
         })?;
         studio.update(cx, |this, cx| {
             let before = this.editor.selection.clone();
+            this.editor.measured = this.canvas.measured();
             let result = agent::execute(&mut this.editor, name, arguments);
             // Follow the agent: show what it just selected or created.
             if this.editor.selection != before

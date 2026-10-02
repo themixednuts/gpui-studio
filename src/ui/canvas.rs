@@ -17,15 +17,17 @@ use gpui_kit::{
 
 use super::paint::{LayoutMap, Painter};
 use super::{
-    ArrowTool, BringForward, CANVAS_CONTEXT, CommentTool, ConnectorTool, CopySelection,
-    CutSelection, DeleteSelection, DuplicateSelection, EllipseTool, EnterSelection,
-    EscapeSelection, FrameTool, GroupSelection, HandTool, LineTool, NudgeDown, NudgeDownBig,
-    NudgeLeft, NudgeLeftBig, NudgeRight, NudgeRightBig, NudgeUp, NudgeUpBig, PasteClipboard,
-    PencilTool, RectangleTool, RenameSelection, RightTab, SelectAllSiblings, SelectTool,
-    SendBackward, Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked, UngroupSelection,
-    ZoomToSelection,
+    AlignBottom, AlignHCenter, AlignLeft, AlignRight, AlignTop, AlignVCenter, ArrowTool,
+    BringForward, CANVAS_CONTEXT, CommentTool, ConnectorTool, CopySelection, CutSelection,
+    DeleteSelection, DistributeHorizontal, DistributeVertical, DuplicateSelection, EllipseTool,
+    EnterSelection, EscapeSelection, FrameTool, GroupSelection, HandTool, LineTool, NudgeDown,
+    NudgeDownBig, NudgeLeft, NudgeLeftBig, NudgeRight, NudgeRightBig, NudgeUp, NudgeUpBig,
+    PasteClipboard, PencilTool, PlaceImage, RectangleTool, RenameSelection, RightTab,
+    SelectAllSiblings, SelectTool, SendBackward, Studio, TextTool, ToggleAutoLayout, ToggleHidden,
+    ToggleLocked, UngroupSelection, ZoomToSelection,
 };
-use crate::editor::{InsertTarget, Tool};
+use crate::editor::{ImagePlacement, InsertTarget, Tool};
+use crate::geometry::{Align, Axis, Edges, Guide, Rect, guides, snap};
 use crate::model::connection::{Anchor, distance_to_polyline, midpoint, route};
 use crate::model::html::escape_text;
 use crate::model::style::{Display, Position, fmt_num};
@@ -36,6 +38,8 @@ const MIN_ZOOM: f32 = 0.05;
 const MAX_ZOOM: f32 = 16.0;
 const DRAG_THRESHOLD: f32 = 3.0;
 const HANDLE: f32 = 8.0;
+/// Snapping reach in screen pixels.
+const SNAP_DISTANCE: f32 = 5.0;
 
 /// Canvas camera: screen offset of the document origin and scale.
 #[derive(Clone, Copy, Debug)]
@@ -141,10 +145,12 @@ enum Drag {
     MoveArtboards {
         start: Point<Pixels>,
         origins: Vec<(NodeId, f32, f32)>,
+        rect: Option<Rect>,
     },
     MoveAbsolute {
         start: Point<Pixels>,
         origins: Vec<(NodeId, f32, f32)>,
+        rect: Option<Rect>,
     },
     Reorder {
         id: NodeId,
@@ -193,6 +199,8 @@ pub(crate) struct CanvasState {
     /// overlays built from last frame's bounds catch up.
     rendered: Option<(u64, f32, Point<Pixels>, Vec<NodeId>)>,
     text_edit: Option<(NodeId, Entity<InputState>, gpui_kit::Subscription)>,
+    /// Smart guides for the current gesture (document pixels).
+    guides: Vec<Guide>,
 }
 
 impl CanvasState {
@@ -213,6 +221,7 @@ impl CanvasState {
             gesture: 0,
             rendered: None,
             text_edit: None,
+            guides: Vec::new(),
         }
     }
 
@@ -272,6 +281,25 @@ impl CanvasState {
                 b.size.height.as_f32() / self.camera.zoom,
             ),
         })
+    }
+
+    /// A node's last laid-out rectangle in document pixels.
+    pub(crate) fn doc_rect(&self, id: NodeId) -> Option<Rect> {
+        let b = self.doc_bounds(id)?;
+        Some(Rect::new(
+            b.origin.x,
+            b.origin.y,
+            b.size.width,
+            b.size.height,
+        ))
+    }
+
+    /// Every laid-out layer in document pixels.
+    pub(crate) fn measured(&self) -> std::collections::HashMap<NodeId, Rect> {
+        let ids: Vec<NodeId> = self.layout.borrow().keys().copied().collect();
+        ids.into_iter()
+            .filter_map(|id| Some((id, self.doc_rect(id)?)))
+            .collect()
     }
 
     fn window_bounds(&self, id: NodeId) -> Option<Bounds<Pixels>> {
@@ -786,17 +814,25 @@ impl Studio {
                 self.editor.select(picked);
                 self.inspector.invalidate();
             }
-            Drag::MoveArtboards { start, origins } => {
-                let dx = (p.x - start.x).as_f32() / zoom;
-                let dy = (p.y - start.y).as_f32() / zoom;
+            Drag::MoveArtboards {
+                start,
+                origins,
+                rect,
+            } => {
+                let ids: Vec<NodeId> = origins.iter().map(|o| o.0).collect();
+                let (dx, dy) = self.snapped_offset(start, p, rect, &ids, modifiers);
                 for (id, x, y) in &origins {
                     let _ = self.editor.move_artboard(*id, x + dx, y + dy, Some(&key));
                 }
                 self.inspector.invalidate();
             }
-            Drag::MoveAbsolute { start, origins } => {
-                let dx = (p.x - start.x).as_f32() / zoom;
-                let dy = (p.y - start.y).as_f32() / zoom;
+            Drag::MoveAbsolute {
+                start,
+                origins,
+                rect,
+            } => {
+                let ids: Vec<NodeId> = origins.iter().map(|o| o.0).collect();
+                let (dx, dy) = self.snapped_offset(start, p, rect, &ids, modifiers);
                 for (id, left, top) in &origins {
                     let _ = self.editor.set_styles(
                         &[*id],
@@ -826,7 +862,17 @@ impl Studio {
                 rect,
                 insets,
             } => {
-                self.apply_resize(id, handle, start, rect, insets, p, modifiers.shift, &key);
+                self.apply_resize(
+                    id,
+                    handle,
+                    start,
+                    rect,
+                    insets,
+                    p,
+                    modifiers.shift,
+                    !modifiers.secondary(),
+                    &key,
+                );
                 self.inspector.invalidate();
             }
             Drag::Draw {
@@ -1047,6 +1093,63 @@ impl Studio {
         }
     }
 
+    /// Rectangles a moving or resizing layer snaps to: other artboards for
+    /// artboards; otherwise the parent and its other visible children.
+    fn snap_targets(&self, moving: &[NodeId]) -> Vec<Rect> {
+        let doc = &self.editor.doc;
+        let Some(first) = moving.first() else {
+            return Vec::new();
+        };
+        let others: Vec<NodeId> = if doc.is_artboard(*first) {
+            self.page_artboards()
+        } else {
+            match doc.parent(*first) {
+                Some(parent) => std::iter::once(parent)
+                    .chain(doc.children(parent).iter().copied())
+                    .collect(),
+                None => Vec::new(),
+            }
+        };
+        others
+            .into_iter()
+            .filter(|id| {
+                !moving.contains(id) && doc.get(*id).is_some_and(|n| !n.hidden && !n.is_text())
+            })
+            .filter_map(|id| self.canvas.doc_rect(id))
+            .collect()
+    }
+
+    /// Pointer offset in document pixels, snapped to nearby edges and centers
+    /// (hold ⌘/Ctrl to move freely). Updates the visible guides.
+    fn snapped_offset(
+        &mut self,
+        start: Point<Pixels>,
+        p: Point<Pixels>,
+        rect: Option<Rect>,
+        ids: &[NodeId],
+        modifiers: Modifiers,
+    ) -> (f32, f32) {
+        let zoom = self.canvas.camera.zoom;
+        let mut dx = (p.x - start.x).as_f32() / zoom;
+        let mut dy = (p.y - start.y).as_f32() / zoom;
+        self.canvas.guides.clear();
+        if let Some(rect) = rect
+            && !modifiers.secondary()
+        {
+            let targets = self.snap_targets(ids);
+            let s = snap(
+                rect.offset(dx.round(), dy.round()),
+                Edges::ALL,
+                &targets,
+                SNAP_DISTANCE / zoom,
+            );
+            dx = dx.round() + s.dx;
+            dy = dy.round() + s.dy;
+            self.canvas.guides = s.guides;
+        }
+        (dx, dy)
+    }
+
     fn begin_drag(&self, start: Point<Pixels>, press: Press) -> Drag {
         let doc = &self.editor.doc;
         match press {
@@ -1069,7 +1172,13 @@ impl Studio {
                         .iter()
                         .filter_map(|s| doc.artboard_of(*s).map(|a| (*s, a.x, a.y)))
                         .collect();
-                    return Drag::MoveArtboards { start, origins };
+                    let rect =
+                        Rect::union_all(selection.iter().filter_map(|s| self.canvas.doc_rect(*s)));
+                    return Drag::MoveArtboards {
+                        start,
+                        origins,
+                        rect,
+                    };
                 }
                 let absolute = |n: NodeId| {
                     doc.get(n)
@@ -1094,7 +1203,17 @@ impl Studio {
                             Some((*s, left, top))
                         })
                         .collect();
-                    return Drag::MoveAbsolute { start, origins };
+                    let rect = Rect::union_all(
+                        selection
+                            .iter()
+                            .filter(|s| absolute(**s))
+                            .filter_map(|s| self.canvas.doc_rect(*s)),
+                    );
+                    return Drag::MoveAbsolute {
+                        start,
+                        origins,
+                        rect,
+                    };
                 }
                 Drag::Reorder { id, target: None }
             }
@@ -1193,6 +1312,7 @@ impl Studio {
         insets: (f32, f32),
         p: Point<Pixels>,
         keep_aspect: bool,
+        snapping: bool,
         key: &str,
     ) {
         let zoom = self.canvas.camera.zoom;
@@ -1227,6 +1347,29 @@ impl Studio {
             }
             w = nw;
             h = nh;
+        }
+        self.canvas.guides.clear();
+        if snapping && !keep_aspect {
+            let edges = Edges {
+                x: [ax == 0.0, false, ax == 1.0],
+                y: [ay == 0.0, false, ay == 1.0],
+            };
+            let targets = self.snap_targets(&[id]);
+            let threshold = SNAP_DISTANCE / zoom;
+            let s = snap(Rect::new(x, y, w, h), edges, &targets, threshold);
+            if ax == 1.0 {
+                w += s.dx;
+            } else if ax == 0.0 {
+                x += s.dx;
+                w -= s.dx;
+            }
+            if ay == 1.0 {
+                h += s.dy;
+            } else if ay == 0.0 {
+                y += s.dy;
+                h -= s.dy;
+            }
+            self.canvas.guides = guides(Rect::new(x, y, w, h), edges, &targets);
         }
         w = w.max(1.0).round();
         h = h.max(1.0).round();
@@ -1275,6 +1418,7 @@ impl Studio {
         let Some(drag) = self.canvas.drag.take() else {
             return;
         };
+        self.canvas.guides.clear();
         match drag {
             Drag::Press { press, .. } => match press {
                 Press::Empty if !event.modifiers.shift => self.editor.select([]),
@@ -1709,8 +1853,123 @@ impl Studio {
         true
     }
 
+    /// Where an image dropped at `p` (or pasted, when `None`) goes.
+    fn image_placement(&self, p: Option<Point<Pixels>>) -> ImagePlacement {
+        let doc = &self.editor.doc;
+        let Some(p) = p else {
+            let target = self.editor.insertion_target();
+            return ImagePlacement {
+                parent: target.parent,
+                at: target.parent.is_some().then_some((24.0, 24.0)),
+                index: target.index,
+            };
+        };
+        let (x, y) = self.canvas.to_doc(p);
+        let container = self
+            .hit_path(p, None)
+            .into_iter()
+            .rev()
+            .find(|id| self.is_container(*id) && doc.get(*id).is_some_and(|n| !n.locked));
+        let Some(parent) = container else {
+            return ImagePlacement {
+                parent: None,
+                at: Some((x, y)),
+                index: None,
+            };
+        };
+        let flow = doc
+            .get(parent)
+            .is_some_and(|n| matches!(n.style.computed().display, Display::Flex | Display::Grid));
+        let origin = self
+            .canvas
+            .doc_bounds(parent)
+            .map_or((0.0, 0.0), |b| (b.origin.x, b.origin.y));
+        ImagePlacement {
+            parent: Some(parent),
+            at: Some((x - origin.0, y - origin.1)),
+            index: if flow {
+                self.drop_target(NodeId(u64::MAX), p)
+                    .filter(|t| t.parent == parent)
+                    .map(|t| t.index)
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Import image files (name, bytes), cascading multiple images.
+    pub(super) fn import_images(
+        &mut self,
+        images: Vec<(String, Vec<u8>)>,
+        p: Option<Point<Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let base = self.image_placement(p);
+        let mut placed = Vec::new();
+        for (index, (name, bytes)) in images.into_iter().enumerate() {
+            let offset = index as f32 * 24.0;
+            let placement = ImagePlacement {
+                at: base.at.map(|(x, y)| (x + offset, y + offset)),
+                index: base.index.map(|i| i + index),
+                ..base
+            };
+            if let Some(id) = self.apply(window, cx, |e| e.import_image(&bytes, &name, placement)) {
+                placed.push(id);
+            }
+        }
+        if !placed.is_empty() {
+            self.editor.select(placed);
+            self.tool = Tool::Select;
+            self.canvas_focus.focus(window, cx);
+        }
+    }
+
+    /// Read dropped or copied files that are images.
+    pub(super) fn read_image_files(paths: &[std::path::PathBuf]) -> Vec<(String, Vec<u8>)> {
+        paths
+            .iter()
+            .filter(|p| crate::assets::is_image_path(p))
+            .filter(|p| {
+                std::fs::metadata(p).is_ok_and(|m| m.len() <= crate::assets::MAX_IMAGE_BYTES as u64)
+            })
+            .filter_map(|p| {
+                let name = p.file_name()?.to_str()?.to_owned();
+                Some((name, std::fs::read(p).ok()?))
+            })
+            .collect()
+    }
+
     fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let mut images = Vec::new();
+        for entry in item.entries() {
+            match entry {
+                gpui_kit::ClipboardEntry::Image(image) => {
+                    let ext = match image.format {
+                        gpui_kit::ImageFormat::Png => "png",
+                        gpui_kit::ImageFormat::Jpeg => "jpg",
+                        gpui_kit::ImageFormat::Webp => "webp",
+                        gpui_kit::ImageFormat::Gif => "gif",
+                        gpui_kit::ImageFormat::Svg => "svg",
+                        gpui_kit::ImageFormat::Bmp => "bmp",
+                        _ => continue,
+                    };
+                    images.push((format!("Pasted image.{ext}"), image.bytes.clone()));
+                }
+                gpui_kit::ClipboardEntry::ExternalPaths(paths) => {
+                    images.extend(Self::read_image_files(paths.paths()));
+                }
+                gpui_kit::ClipboardEntry::String(_) => {}
+            }
+        }
+        if !images.is_empty() {
+            self.import_images(images, None, window, cx);
+            return;
+        }
+        let Some(text) = item.text() else {
             return;
         };
         let text = text.trim().to_owned();
@@ -2059,6 +2318,30 @@ impl Studio {
             2.0
         }) * zoom);
         let ink: Hsla = gpui_kit::rgb(0x17181c).into();
+        let guide_color: Hsla = gpui_kit::rgb(0xf24822).into();
+        let guide_lines: Vec<Bounds<Pixels>> = self
+            .canvas
+            .guides
+            .iter()
+            .map(|g| {
+                let (a, b) = match g.axis {
+                    Axis::Vertical => ((g.at, g.from), (g.at, g.to)),
+                    Axis::Horizontal => ((g.from, g.at), (g.to, g.at)),
+                };
+                let a = origin + self.canvas.doc_to_local(a.0, a.1);
+                let b = origin + self.canvas.doc_to_local(b.0, b.1);
+                match g.axis {
+                    Axis::Vertical => Bounds {
+                        origin: point(a.x - px(0.5), a.y),
+                        size: size(px(1.0), b.y - a.y),
+                    },
+                    Axis::Horizontal => Bounds {
+                        origin: point(a.x, a.y - px(0.5)),
+                        size: size(b.x - a.x, px(1.0)),
+                    },
+                }
+            })
+            .collect();
         let overlay = canvas(
             move |_, _, _| {},
             move |_bounds, (), window, _cx| {
@@ -2107,6 +2390,9 @@ impl Studio {
                             }
                         }
                     }
+                }
+                for line in &guide_lines {
+                    window.paint_quad(fill(*line, guide_color));
                 }
                 if let Some((tool, points)) = &stroke_draft {
                     paint_polyline(window, points, stroke_width, ink, false);
@@ -2284,6 +2570,22 @@ impl Studio {
                     cx.notify();
                 }
             }))
+            .on_drop(
+                cx.listener(|this, paths: &gpui_kit::ExternalPaths, window, cx| {
+                    let images = Self::read_image_files(paths.paths());
+                    if images.is_empty() {
+                        window.push_notification(
+                            gpui_kit::component::notification::Notification::warning(
+                                "Drop PNG, JPEG, GIF, WebP, SVG, or BMP images onto the canvas.",
+                            ),
+                            cx,
+                        );
+                        return;
+                    }
+                    let at = window.mouse_position();
+                    this.import_images(images, Some(at), window, cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &SelectTool, _, cx| this.set_tool(Tool::Select, cx)))
             .on_action(cx.listener(|this, _: &FrameTool, _, cx| this.set_tool(Tool::Frame, cx)))
             .on_action(
@@ -2368,6 +2670,23 @@ impl Studio {
                     let locked = this.editor.doc.get(id).is_some_and(|n| n.locked);
                     this.apply(window, cx, |e| e.set_locked(id, !locked));
                 }
+            }))
+            .on_action(cx.listener(|this, _: &PlaceImage, w, cx| this.prompt_place_image(w, cx)))
+            .on_action(cx.listener(|this, _: &AlignLeft, w, cx| this.align(Align::Left, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &AlignHCenter, w, cx| this.align(Align::HCenter, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &AlignRight, w, cx| this.align(Align::Right, w, cx)))
+            .on_action(cx.listener(|this, _: &AlignTop, w, cx| this.align(Align::Top, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &AlignVCenter, w, cx| this.align(Align::VCenter, w, cx)),
+            )
+            .on_action(cx.listener(|this, _: &AlignBottom, w, cx| this.align(Align::Bottom, w, cx)))
+            .on_action(cx.listener(|this, _: &DistributeHorizontal, w, cx| {
+                this.distribute(Axis::Horizontal, w, cx);
+            }))
+            .on_action(cx.listener(|this, _: &DistributeVertical, w, cx| {
+                this.distribute(Axis::Vertical, w, cx);
             }))
             .on_action(cx.listener(|this, _: &RenameSelection, window, cx| {
                 if let Some(id) = this.editor.primary() {

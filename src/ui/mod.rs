@@ -73,7 +73,16 @@ mod actions {
             NextTab,
             PreviousTab,
             ShowHome,
-            TogglePanels
+            TogglePanels,
+            AlignLeft,
+            AlignHCenter,
+            AlignRight,
+            AlignTop,
+            AlignVCenter,
+            AlignBottom,
+            DistributeHorizontal,
+            DistributeVertical,
+            PlaceImage
         ]
     );
 }
@@ -147,6 +156,15 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-h", ToggleHidden, c),
         KeyBinding::new("secondary-shift-l", ToggleLocked, c),
         KeyBinding::new("secondary-r", RenameSelection, c),
+        KeyBinding::new("secondary-shift-k", PlaceImage, c),
+        KeyBinding::new("alt-a", AlignLeft, c),
+        KeyBinding::new("alt-h", AlignHCenter, c),
+        KeyBinding::new("alt-d", AlignRight, c),
+        KeyBinding::new("alt-w", AlignTop, c),
+        KeyBinding::new("alt-v", AlignVCenter, c),
+        KeyBinding::new("alt-s", AlignBottom, c),
+        KeyBinding::new("alt-shift-h", DistributeHorizontal, c),
+        KeyBinding::new("alt-shift-v", DistributeVertical, c),
         KeyBinding::new("secondary-z", UndoEdit, r),
         KeyBinding::new("secondary-shift-z", RedoEdit, r),
         KeyBinding::new("secondary-y", RedoEdit, r),
@@ -329,7 +347,9 @@ gpui_kit::assets::icon_assets!(
         Circle,
         Ellipsis,
         Pipette,
-        SquareDashed
+        SquareDashed,
+        AlignHorizontalSpaceAround,
+        AlignVerticalSpaceAround
     ]
 );
 
@@ -724,5 +744,51 @@ mod tests {
                 "the pencil stroke is an SVG layer in the artboard"
             );
         });
+    }
+
+    #[gpui_kit::test]
+    fn pasting_an_image_copies_it_into_the_project(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let project = dir.path().join("design");
+        let (handle, workspace, automation) = boot(
+            cx,
+            LaunchConfig {
+                project: Some(project.clone()),
+                example: None,
+                state_path: Some(dir.path().join("workspace.ron")),
+                mcp: false,
+            },
+        );
+        let studio = cx.update(|cx| workspace.read(cx).tabs[0].clone());
+        let desktop = cx.update(|cx| studio.read(cx).editor.doc.pages[0].artboards[0].root);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.render_frame(cx);
+            click(window, cx, center(&automation, desktop), 1);
+        })
+        .expect("focus canvas");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_image(
+                &gpui_kit::Image::from_bytes(
+                    gpui_kit::ImageFormat::Png,
+                    crate::assets::tests_png(),
+                ),
+            ));
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.press("secondary-v", cx);
+        })
+        .expect("paste");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let editor = &studio.read(cx).editor;
+            let image = editor.primary().expect("pasted image is selected");
+            let node = editor.doc.get(image).expect("node");
+            assert_eq!(node.tag(), "img");
+            assert_eq!(node.attr("src"), Some("assets/pasted-image.png"));
+            assert_eq!(editor.doc.root_of(image), desktop);
+        });
+        assert!(project.join("artboards/assets/pasted-image.png").exists());
     }
 }

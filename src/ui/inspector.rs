@@ -8,7 +8,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement as _;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Context, Entity, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
@@ -19,6 +19,7 @@ use gpui_kit::Focusable as _;
 
 use super::Studio;
 use super::paint::hsla;
+use crate::geometry::{Align as AlignTo, Axis};
 use crate::model::style::{
     Align, Computed, Display, Length, LineHeight, Overflow, Position, Shadow, TextAlign, fmt_num,
 };
@@ -864,6 +865,78 @@ impl Studio {
                             }),
                     ),
             )
+            .into_any_element()
+    }
+
+    /// Align and distribute buttons for the selection.
+    fn render_align_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let count = self.editor.selection.len();
+        let icons = [
+            (AlignTo::Left, Lucide::AlignStartVertical, "Align left (⌥A)"),
+            (
+                AlignTo::HCenter,
+                Lucide::AlignCenterVertical,
+                "Align horizontal centers (⌥H)",
+            ),
+            (AlignTo::Right, Lucide::AlignEndVertical, "Align right (⌥D)"),
+            (AlignTo::Top, Lucide::AlignStartHorizontal, "Align top (⌥W)"),
+            (
+                AlignTo::VCenter,
+                Lucide::AlignCenterHorizontal,
+                "Align vertical centers (⌥V)",
+            ),
+            (
+                AlignTo::Bottom,
+                Lucide::AlignEndHorizontal,
+                "Align bottom (⌥S)",
+            ),
+        ];
+        let mut row = h_flex().gap_0p5();
+        for (align, icon, tooltip) in icons {
+            row = row.child(
+                Button::new(SharedString::from(format!("align-{align:?}")))
+                    .icon(Icon::new(icon))
+                    .ghost()
+                    .xsmall()
+                    .tooltip(tooltip)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.align(align, window, cx);
+                    })),
+            );
+        }
+        let distribute = [
+            (
+                Axis::Horizontal,
+                Lucide::AlignHorizontalSpaceAround,
+                "Distribute horizontally (⌥⇧H)",
+            ),
+            (
+                Axis::Vertical,
+                Lucide::AlignVerticalSpaceAround,
+                "Distribute vertically (⌥⇧V)",
+            ),
+        ];
+        row = row.child(div().w(px(1.0)).h(px(16.0)).mx_1().bg(theme.border));
+        for (axis, icon, tooltip) in distribute {
+            row = row.child(
+                Button::new(SharedString::from(format!("distribute-{axis:?}")))
+                    .icon(Icon::new(icon))
+                    .ghost()
+                    .xsmall()
+                    .disabled(count < 3)
+                    .tooltip(tooltip)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.distribute(axis, window, cx);
+                    })),
+            );
+        }
+        div()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(row)
             .into_any_element()
     }
 
@@ -1864,6 +1937,7 @@ impl Studio {
         let mut panel = v_flex()
             .pb_8()
             .child(self.render_header(id, cx))
+            .child(self.render_align_bar(cx))
             .child(self.render_frame_section(id, &c, cx));
         if !is_text && !is_svg {
             panel = panel.child(self.render_layout_section(&c, cx));

@@ -4,11 +4,13 @@
 //! methods, so a change made by a person and the same change made by an agent
 //! take one path: snapshot for undo, apply, bump the revision, autosave.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::comments::Comments;
+use crate::geometry::{Align, Axis, Rect, align_deltas, distribute_deltas};
 use crate::history::History;
 use crate::model::html::{ExportOptions, ImportOptions, parse_fragment, to_html};
 use crate::model::style::{Position, fmt_num};
@@ -83,6 +85,29 @@ pub struct InsertTarget {
     pub index: Option<usize>,
 }
 
+/// Where an imported image goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ImagePlacement {
+    /// Parent element; `None` creates an artboard holding the image.
+    pub parent: Option<NodeId>,
+    /// Top-left corner: canvas position for a new artboard, or the offset in
+    /// the parent for absolute placement. `None` picks a free spot.
+    pub at: Option<(f32, f32)>,
+    /// Index among the parent's children for flex/grid parents.
+    pub index: Option<usize>,
+}
+
+/// Where a layer dropped in the layer list lands relative to the target row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropPosition {
+    /// Just before the target, as its sibling.
+    Before,
+    /// As the target's last child.
+    Inside,
+    /// Just after the target, as its sibling.
+    After,
+}
+
 /// The open design and its editing state.
 pub struct Editor {
     /// The document.
@@ -101,6 +126,10 @@ pub struct Editor {
     pub revision: u64,
     /// Last status message.
     pub status: String,
+    /// Laid-out bounds in document pixels from the canvas, for operations that
+    /// depend on rendered geometry (alignment, export, agent queries). Empty
+    /// when nothing has been rendered.
+    pub measured: HashMap<NodeId, Rect>,
     dirty: bool,
     last_edit: Instant,
 }
@@ -118,6 +147,7 @@ impl Editor {
             page: 0,
             revision: 1,
             status: "Ready".to_owned(),
+            measured: HashMap::new(),
             dirty: false,
             last_edit: Instant::now(),
         }
@@ -436,6 +466,165 @@ impl Editor {
     /// Move a node to a parent position.
     pub fn move_node(&mut self, id: NodeId, parent: NodeId, index: Option<usize>) -> Result<()> {
         self.edit(None, |doc| Ok(doc.move_node(id, parent, index)?))
+    }
+
+    /// Copy an image into the project's `artboards/assets/` and place it as an
+    /// `<img>` layer. One undoable step.
+    pub fn import_image(
+        &mut self,
+        bytes: &[u8],
+        file_name: &str,
+        placement: ImagePlacement,
+    ) -> Result<NodeId> {
+        let project = self
+            .project
+            .as_ref()
+            .context("images can only be imported into a saved project")?;
+        let src = crate::assets::store_image(&project.root().join("artboards"), file_name, bytes)?;
+        let ext = crate::assets::extension(file_name).unwrap_or_default();
+        let natural = crate::assets::image_size(bytes, &ext).unwrap_or((400.0, 300.0));
+        let stem = std::path::Path::new(file_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Image")
+            .to_owned();
+        let name = crate::model::html::escape_attr(&stem);
+        let src = crate::model::html::escape_attr(&src);
+        let page = self.page;
+        let next = self.next_artboard_position();
+        let id = match placement.parent {
+            None => {
+                let (w, h) = crate::assets::fit_within(natural, 1600.0);
+                let (x, y) = placement.at.unwrap_or(next);
+                let html = format!(
+                    "<div data-name=\"{name}\" style=\"position: relative; width: {w}px; height: {h}px; background-color: transparent; overflow: hidden\"><img data-name=\"{name}\" src=\"{src}\" alt=\"{name}\" style=\"display: block; width: 100%; height: 100%; object-fit: cover\"></div>",
+                    w = fmt_num(w),
+                    h = fmt_num(h),
+                );
+                self.edit(None, |doc| {
+                    let roots = parse_fragment(doc, &html, ImportOptions { keep_ids: false });
+                    let root = *roots.first().context("image markup did not parse")?;
+                    doc.add_artboard(page, root, x.round(), y.round());
+                    Ok(root)
+                })?
+            }
+            Some(parent) => {
+                let computed = self
+                    .doc
+                    .get(parent)
+                    .context("the parent no longer exists")?
+                    .style
+                    .computed();
+                let flow = matches!(
+                    computed.display,
+                    crate::model::style::Display::Flex | crate::model::style::Display::Grid
+                );
+                let limit = self
+                    .measured
+                    .get(&parent)
+                    .map_or(800.0, |r| r.w.clamp(48.0, 800.0));
+                let (w, h) = crate::assets::fit_within(natural, limit);
+                let mut style = format!(
+                    "display: block; width: {}px; height: {}px; object-fit: cover",
+                    fmt_num(w),
+                    fmt_num(h)
+                );
+                if !flow {
+                    let (x, y) = placement.at.unwrap_or((0.0, 0.0));
+                    style = format!(
+                        "position: absolute; left: {}px; top: {}px; {style}",
+                        fmt_num(x.round()),
+                        fmt_num(y.round())
+                    );
+                }
+                let html = format!(
+                    "<img data-name=\"{name}\" src=\"{src}\" alt=\"{name}\" style=\"{style}\">"
+                );
+                let needs_relative =
+                    !flow && computed.position == Position::Static && !self.doc.is_artboard(parent);
+                let index = if flow { placement.index } else { None };
+                self.edit(None, |doc| {
+                    if needs_relative && let Some(node) = doc.get_mut(parent) {
+                        node.style.set("position", "relative");
+                    }
+                    let roots = parse_fragment(doc, &html, ImportOptions { keep_ids: false });
+                    let root = *roots.first().context("image markup did not parse")?;
+                    doc.attach(root, parent, index)?;
+                    Ok(root)
+                })?
+            }
+        };
+        self.select([id]);
+        Ok(id)
+    }
+
+    /// Whether `dragged` may be dropped at `target`/`position` in the layer list.
+    #[must_use]
+    pub fn can_drop_layer(&self, dragged: NodeId, target: NodeId, position: DropPosition) -> bool {
+        let doc = &self.doc;
+        if dragged == target || doc.is_ancestor_or_self(dragged, target) {
+            return false;
+        }
+        let dragged_artboard = doc.is_artboard(dragged);
+        match position {
+            DropPosition::Inside => {
+                !dragged_artboard
+                    && doc.get(target).is_some_and(|n| {
+                        matches!(&n.kind, NodeKind::Element { tag } if !matches!(tag.as_str(), "img" | "input" | "br" | "hr"))
+                    })
+                    && !doc.is_text_layer(target)
+            }
+            DropPosition::Before | DropPosition::After => dragged_artboard == doc.is_artboard(target),
+        }
+    }
+
+    /// Move a layer (or reorder an artboard) by dropping it on another row of
+    /// the layer list.
+    pub fn drop_layer(
+        &mut self,
+        dragged: NodeId,
+        target: NodeId,
+        position: DropPosition,
+    ) -> Result<()> {
+        if !self.can_drop_layer(dragged, target, position) {
+            bail!("can't move {} there", self.doc.display_name(dragged));
+        }
+        if let (Some((page, from)), Some((target_page, to))) = (
+            self.doc.artboard_index(dragged),
+            self.doc.artboard_index(target),
+        ) {
+            if page != target_page {
+                bail!("artboards can only be reordered within a page");
+            }
+            let mut to = to + usize::from(position == DropPosition::After);
+            if from < to {
+                to -= 1;
+            }
+            return self.edit(None, |doc| {
+                let artboard = doc.pages[page].artboards.remove(from);
+                doc.pages[page].artboards.insert(to, artboard);
+                Ok(())
+            });
+        }
+        let (parent, index) = match position {
+            DropPosition::Inside => (target, None),
+            DropPosition::Before | DropPosition::After => {
+                let parent = self.doc.parent(target).context("target has no parent")?;
+                let index = self
+                    .doc
+                    .children(parent)
+                    .iter()
+                    .position(|c| *c == target)
+                    .context("target is not a child of its parent")?;
+                (
+                    parent,
+                    Some(index + usize::from(position == DropPosition::After)),
+                )
+            }
+        };
+        self.move_node(dragged, parent, index)?;
+        self.select([dragged]);
+        Ok(())
     }
 
     /// Move an artboard on the canvas.
@@ -908,6 +1097,128 @@ impl Editor {
         })
     }
 
+    /// Move artboards and absolutely positioned layers by per-node offsets in
+    /// one undoable step. Flow layers can't be positioned and are skipped.
+    /// Returns how many moved.
+    pub fn move_by(&mut self, moves: &[(NodeId, f32, f32)], key: Option<&str>) -> Result<usize> {
+        let ids: Vec<NodeId> = moves.iter().map(|m| m.0).collect();
+        let keep = self.topmost(&ids);
+        let mut moved = 0;
+        // (id, dx, dy, measured offset in the parent for missing insets)
+        type Step = (NodeId, f32, f32, Option<(f32, f32)>);
+        let mut plan: Vec<Step> = Vec::new();
+        for (id, dx, dy) in moves {
+            if !keep.contains(id) || (dx.abs() < 0.01 && dy.abs() < 0.01) {
+                continue;
+            }
+            let offset = self.doc.parent(*id).and_then(|parent| {
+                let r = self.measured.get(id)?;
+                let p = self.measured.get(&parent)?;
+                Some((r.x - p.x, r.y - p.y))
+            });
+            plan.push((*id, *dx, *dy, offset));
+        }
+        self.edit(key, |doc| {
+            for (id, dx, dy, offset) in &plan {
+                if let Some(artboard) = doc.artboard_mut(*id) {
+                    artboard.x = (artboard.x + dx).round();
+                    artboard.y = (artboard.y + dy).round();
+                    moved += 1;
+                    continue;
+                }
+                let Some(node) = doc.get(*id) else {
+                    continue;
+                };
+                let computed = node.style.computed();
+                if computed.position != Position::Absolute {
+                    continue;
+                }
+                // Missing insets fall back to the measured offset in the parent.
+                let left = computed.inset[3]
+                    .px()
+                    .or(offset.map(|o| o.0))
+                    .unwrap_or(0.0);
+                let top = computed.inset[0]
+                    .px()
+                    .or(offset.map(|o| o.1))
+                    .unwrap_or(0.0);
+                let Some(node) = doc.get_mut(*id) else {
+                    continue;
+                };
+                node.style
+                    .set("left", &format!("{}px", fmt_num((left + dx).round())));
+                node.style
+                    .set("top", &format!("{}px", fmt_num((top + dy).round())));
+                if computed.inset[1].px().is_some() {
+                    node.style.remove("right");
+                }
+                if computed.inset[2].px().is_some() {
+                    node.style.remove("bottom");
+                }
+                moved += 1;
+            }
+            Ok(())
+        })?;
+        Ok(moved)
+    }
+
+    fn movable(&self, ids: &[NodeId]) -> Vec<(NodeId, Rect)> {
+        self.topmost(ids)
+            .into_iter()
+            .filter(|id| {
+                self.doc.is_artboard(*id)
+                    || self
+                        .doc
+                        .get(*id)
+                        .is_some_and(|n| n.style.computed().position == Position::Absolute)
+            })
+            .filter_map(|id| Some((id, *self.measured.get(&id)?)))
+            .collect()
+    }
+
+    /// Align layers to each other, or a single layer to its parent. Uses the
+    /// measured layout. Returns how many moved.
+    pub fn align(&mut self, ids: &[NodeId], align: Align) -> Result<usize> {
+        let items = self.movable(ids);
+        if items.is_empty() {
+            bail!("select artboards or absolutely positioned layers to align");
+        }
+        let target = if let [(id, _)] = items.as_slice() {
+            let parent = self
+                .doc
+                .parent(*id)
+                .context("a single artboard has nothing to align to")?;
+            *self
+                .measured
+                .get(&parent)
+                .context("the parent has not been laid out yet")?
+        } else {
+            Rect::union_all(items.iter().map(|i| i.1)).context("nothing to align")?
+        };
+        let rects: Vec<Rect> = items.iter().map(|i| i.1).collect();
+        let moves: Vec<(NodeId, f32, f32)> = items
+            .iter()
+            .zip(align_deltas(&rects, target, align))
+            .map(|((id, _), (dx, dy))| (*id, dx, dy))
+            .collect();
+        self.move_by(&moves, None)
+    }
+
+    /// Space three or more layers evenly along an axis. Returns how many moved.
+    pub fn distribute(&mut self, ids: &[NodeId], axis: Axis) -> Result<usize> {
+        let items = self.movable(ids);
+        if items.len() < 3 {
+            bail!("select three or more artboards or absolutely positioned layers to distribute");
+        }
+        let rects: Vec<Rect> = items.iter().map(|i| i.1).collect();
+        let moves: Vec<(NodeId, f32, f32)> = items
+            .iter()
+            .zip(distribute_deltas(&rects, axis))
+            .map(|((id, _), (dx, dy))| (*id, dx, dy))
+            .collect();
+        self.move_by(&moves, None)
+    }
+
     /// Set a fixed size in document pixels.
     pub fn set_size(
         &mut self,
@@ -941,6 +1252,91 @@ mod tests {
         let mut doc = Document::new();
         let board = doc.create_artboard(0, "Home", (0.0, 0.0), (800.0, 600.0));
         (Editor::new(doc), board)
+    }
+
+    #[test]
+    fn images_are_copied_into_the_project_and_placed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = Editor::open(dir.path()).unwrap();
+        let board = editor
+            .create_artboard("Block", (400.0, 300.0), None)
+            .unwrap();
+        let png = crate::assets::tests_png();
+        // Into a block-flow frame: absolutely positioned at the drop point.
+        let id = editor
+            .import_image(
+                &png,
+                "Hero Shot.png",
+                ImagePlacement {
+                    parent: Some(board),
+                    at: Some((40.0, 60.0)),
+                    index: None,
+                },
+            )
+            .unwrap();
+        let node = editor.doc.get(id).unwrap();
+        assert_eq!(node.attr("src"), Some("assets/hero-shot.png"));
+        assert_eq!(node.style.get("left"), Some("40px"));
+        assert!(dir.path().join("artboards/assets/hero-shot.png").exists());
+        // On empty canvas: a new artboard sized to the image.
+        let board2 = editor
+            .import_image(
+                &png,
+                "logo.png",
+                ImagePlacement {
+                    at: Some((5000.0, 0.0)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(editor.doc.is_artboard(board2));
+        assert_eq!(editor.doc.artboard_of(board2).unwrap().x, 5000.0);
+        assert_eq!(
+            editor.doc.get(board2).unwrap().style.get("width"),
+            Some("1px")
+        );
+        assert!(editor.undo());
+        assert!(!editor.doc.contains(board2));
+        assert!(
+            Editor::new(Document::new())
+                .import_image(&png, "a.png", ImagePlacement::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn layers_drop_before_inside_and_after() {
+        let (mut editor, board) = editor();
+        let ids = editor
+            .insert_html(
+                "<div>A</div><div><p>B1</p></div><p>C</p>",
+                InsertTarget {
+                    parent: Some(board),
+                    index: None,
+                },
+            )
+            .unwrap();
+        let (a, b, c) = (ids[0], ids[1], ids[2]);
+        editor.drop_layer(c, a, DropPosition::Before).unwrap();
+        assert_eq!(editor.doc.children(board), &[c, a, b]);
+        editor.drop_layer(c, b, DropPosition::After).unwrap();
+        assert_eq!(editor.doc.children(board), &[a, b, c]);
+        editor.drop_layer(a, b, DropPosition::Inside).unwrap();
+        assert_eq!(editor.doc.parent(a), Some(b));
+        assert_eq!(editor.doc.children(b).last(), Some(&a));
+        // Not into itself, its descendants, or a text layer; artboards stay top level.
+        assert!(editor.drop_layer(b, a, DropPosition::Inside).is_err());
+        assert!(!editor.can_drop_layer(b, c, DropPosition::Inside));
+        assert!(!editor.can_drop_layer(board, a, DropPosition::Before));
+        let other = editor
+            .create_artboard("Other", (100.0, 100.0), None)
+            .unwrap();
+        editor
+            .drop_layer(other, board, DropPosition::Before)
+            .unwrap();
+        assert_eq!(editor.doc.pages[0].artboards[0].root, other);
+        assert!(editor.undo());
+        assert_eq!(editor.doc.pages[0].artboards[0].root, board);
     }
 
     #[test]
