@@ -78,6 +78,8 @@ pub(crate) struct Studio {
     pub(crate) export_scale: f32,
     /// An image export waiting for its 1× layout.
     pub(crate) export_job: Option<super::image_export::ExportJob>,
+    /// Whether rulers are shown.
+    pub(crate) rulers: bool,
     /// Whether the chat panel is open.
     pub(crate) chat_open: bool,
     /// The chat composer.
@@ -117,6 +119,7 @@ impl Studio {
         let studio = Self {
             editor,
             chat_open: false,
+            rulers: true,
             chat_input,
             tool: Tool::Select,
             canvas,

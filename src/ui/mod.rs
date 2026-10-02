@@ -7,6 +7,8 @@ mod inspector;
 mod paint;
 mod panels;
 mod present;
+mod rulers;
+mod spacing;
 mod studio;
 mod variables;
 mod workspace;
@@ -91,7 +93,8 @@ mod actions {
             DetachInstance,
             StartPresenting,
             ExportSelection,
-            ToggleChat
+            ToggleChat,
+            ToggleRulers
         ]
     );
 }
@@ -166,6 +169,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-l", ToggleLocked, c),
         KeyBinding::new("secondary-r", RenameSelection, c),
         KeyBinding::new("secondary-shift-k", PlaceImage, c),
+        KeyBinding::new("shift-r", ToggleRulers, c),
         KeyBinding::new("secondary-alt-k", CreateComponent, c),
         KeyBinding::new("secondary-alt-b", DetachInstance, c),
         KeyBinding::new("secondary-alt-enter", StartPresenting, c),
@@ -1057,5 +1061,69 @@ mod tests {
             "the agent's presence shows"
         );
         assert!(!label(&automation, "Unread chat messages for the agent"));
+    }
+
+    #[gpui_kit::test]
+    fn dragging_padding_and_gap_bands_edits_spacing(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (handle, workspace, _) = boot(
+            cx,
+            LaunchConfig {
+                project: Some(dir.path().join("design")),
+                example: None,
+                state_path: Some(dir.path().join("workspace.ron")),
+                mcp: false,
+            },
+        );
+        let studio = cx.update(|cx| workspace.read(cx).tabs[0].clone());
+        let hero = cx.update(|cx| {
+            studio.update(cx, |s, _| {
+                let doc = &s.editor.doc;
+                let hero = doc
+                    .descendants(doc.pages[0].artboards[0].root)
+                    .into_iter()
+                    .find(|id| doc.get(*id).and_then(|n| n.name.as_deref()) == Some("Hero"))
+                    .expect("hero");
+                s.editor.select([hero]);
+                hero
+            })
+        });
+        let padding = |cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                let s = studio.read(cx);
+                let node = s.editor.doc.get(hero).expect("hero");
+                s.editor.doc.computed(node)
+            })
+        };
+        let before = padding(cx);
+        for spacing in [
+            super::spacing::Spacing::Top,
+            super::spacing::Spacing::ColumnGap,
+        ] {
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window.render_frame(cx);
+                let band = studio
+                    .read(cx)
+                    .spacing_bands()
+                    .into_iter()
+                    .find(|b| b.spacing == spacing)
+                    .expect("band");
+                let start = band.bounds.center();
+                window.drag(start, start + gpui_kit::point(px(0.0), px(20.0)), cx);
+            })
+            .expect("drag band");
+            cx.run_until_parked();
+        }
+        let after = padding(cx);
+        assert!(after.padding[0] > before.padding[0], "top padding grew");
+        assert_eq!(
+            after.padding[2], before.padding[2],
+            "bottom padding untouched"
+        );
+        assert!(
+            after.row_gap > before.row_gap,
+            "the gap between children grew"
+        );
     }
 }

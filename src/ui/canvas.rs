@@ -24,7 +24,7 @@ use super::{
     GroupSelection, HandTool, LineTool, NudgeDown, NudgeDownBig, NudgeLeft, NudgeLeftBig,
     NudgeRight, NudgeRightBig, NudgeUp, NudgeUpBig, PasteClipboard, PencilTool, PlaceImage,
     RectangleTool, RenameSelection, RightTab, SelectAllSiblings, SelectTool, SendBackward,
-    StartPresenting, Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked,
+    StartPresenting, Studio, TextTool, ToggleAutoLayout, ToggleHidden, ToggleLocked, ToggleRulers,
     UngroupSelection, ZoomToSelection,
 };
 use crate::editor::{ImagePlacement, InsertTarget, Tool};
@@ -181,6 +181,7 @@ enum Drag {
         current: Point<Pixels>,
         from: Endpoint,
     },
+    Spacing(super::spacing::SpacingDrag),
 }
 
 /// Canvas UI state.
@@ -202,6 +203,8 @@ pub(crate) struct CanvasState {
     text_edit: Option<(NodeId, Entity<InputState>, gpui_kit::Subscription)>,
     /// Smart guides for the current gesture (document pixels).
     guides: Vec<Guide>,
+    /// Spacing band under the pointer.
+    pub(crate) spacing_hover: Option<super::spacing::Spacing>,
 }
 
 impl CanvasState {
@@ -223,6 +226,7 @@ impl CanvasState {
             rendered: None,
             text_edit: None,
             guides: Vec::new(),
+            spacing_hover: None,
         }
     }
 
@@ -303,6 +307,16 @@ impl CanvasState {
             .collect()
     }
 
+    /// A node's last laid-out bounds in window coordinates.
+    pub(crate) fn window_bounds_of(&self, id: NodeId) -> Option<Bounds<Pixels>> {
+        self.window_bounds(id)
+    }
+
+    /// Whether a text layer is being edited in place.
+    pub(crate) fn text_edit_target_any(&self) -> bool {
+        self.text_edit.is_some()
+    }
+
     fn window_bounds(&self, id: NodeId) -> Option<Bounds<Pixels>> {
         self.layout.borrow().get(&id).copied()
     }
@@ -362,6 +376,16 @@ fn rect_from_points(a: Point<Pixels>, b: Point<Pixels>) -> Bounds<Pixels> {
         point(a.x.min(b.x), a.y.min(b.y)),
         point(a.x.max(b.x), a.y.max(b.y)),
     )
+}
+
+fn inset_by(b: Bounds<Pixels>, by: Pixels) -> Bounds<Pixels> {
+    Bounds {
+        origin: b.origin + point(by, by),
+        size: size(
+            (b.size.width - by * 2.0).max(px(0.0)),
+            (b.size.height - by * 2.0).max(px(0.0)),
+        ),
+    }
 }
 
 fn distance(a: Point<Pixels>, b: Point<Pixels>) -> f32 {
@@ -616,6 +640,18 @@ impl Studio {
             return;
         }
         self.selected_connection = None;
+        // Padding/gap bands win over edge handles once the pointer is
+        // clearly inside the box (corners and edges still resize).
+        if let (Some(band), Some(id)) = (self.spacing_hit(p), self.editor.primary())
+            && self
+                .canvas
+                .window_bounds(id)
+                .is_some_and(|b| inset_by(b, px(5.0)).contains(&p))
+        {
+            let drag = self.begin_spacing_drag(id, band, p);
+            self.canvas.drag = Some(Drag::Spacing(drag));
+            return;
+        }
         if let Some((id, handle)) = self.handle_hit(p)
             && let Some(rect) = self.canvas.doc_bounds(id)
         {
@@ -643,6 +679,7 @@ impl Studio {
             });
             return;
         }
+
         if let Some(root) = self.label_hit(p) {
             if shift {
                 self.editor.toggle_selected(root);
@@ -724,6 +761,13 @@ impl Studio {
         if self.canvas.drag.is_some() {
             self.drag_move(event.position, event.modifiers, window, cx);
             return;
+        }
+        let spacing = (self.tool == Tool::Select)
+            .then(|| self.spacing_hit(event.position).map(|b| b.spacing))
+            .flatten();
+        if spacing != self.canvas.spacing_hover {
+            self.canvas.spacing_hover = spacing;
+            cx.notify();
         }
         let hover = match self.tool {
             Tool::Select | Tool::Comment => {
@@ -921,6 +965,10 @@ impl Studio {
                     points,
                     parent,
                 });
+            }
+            Drag::Spacing(drag) => {
+                self.canvas.spacing_hover = Some(drag.spacing);
+                self.apply_spacing_drag(drag, p, modifiers, &key);
             }
             Drag::Connect { start, from, .. } => {
                 let path = self.hit_path(p, None);
@@ -2218,6 +2266,7 @@ impl Studio {
         });
 
         let export_stage = self.render_export_stage(window, cx);
+        let rulers = self.render_rulers(cx);
         let pins = self.render_comment_pins(cx);
         let connection_labels = self.render_connection_labels(cx);
         let draft = self.render_comment_draft(cx);
@@ -2358,6 +2407,41 @@ impl Studio {
             .flat_map(|(_, _, bounds)| bounds)
             .collect();
         let presence_tags = self.render_presence_tags(self.canvas.origin());
+        let dragging_spacing = matches!(self.canvas.drag, Some(Drag::Spacing(_)));
+        let spacing_bands: Vec<(Bounds<Pixels>, bool)> =
+            if self.tool == Tool::Select && (self.canvas.drag.is_none() || dragging_spacing) {
+                self.spacing_bands()
+                    .into_iter()
+                    .filter(|b| b.value > 0.0 || Some(b.spacing) == self.canvas.spacing_hover)
+                    .map(|b| (b.bounds, Some(b.spacing) == self.canvas.spacing_hover))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let spacing_label = self.canvas.spacing_hover.and_then(|hovered| {
+            let band = self
+                .spacing_bands()
+                .into_iter()
+                .find(|b| b.spacing == hovered)?;
+            let local = band.bounds.center() - self.canvas.origin();
+            Some(
+                div()
+                    .absolute()
+                    .left(local.x - px(16.0))
+                    .top(local.y - px(9.0))
+                    .w(px(32.0))
+                    .h(px(18.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .bg(super::spacing::SPACING_COLOR)
+                    .text_color(gpui_kit::white())
+                    .text_size(px(10.0))
+                    .child(fmt_num(band.value.round()))
+                    .into_any_element(),
+            )
+        });
         let annotations: Vec<(Hsla, Vec<Bounds<Pixels>>)> = self
             .annotation_overlays()
             .into_iter()
@@ -2462,6 +2546,13 @@ impl Studio {
                             }
                         }
                     }
+                }
+                for (band, hovered) in &spacing_bands {
+                    let pink = super::spacing::SPACING_COLOR;
+                    window.paint_quad(fill(
+                        *band,
+                        pink.opacity(if *hovered { 0.35 } else { 0.12 }),
+                    ));
                 }
                 for (color, bounds) in &annotations {
                     for b in bounds {
@@ -2644,8 +2735,17 @@ impl Studio {
                 Tool::Comment => CursorStyle::PointingHand,
                 _ => {
                     let p = window.mouse_position();
-                    self.handle_hit(p)
-                        .map_or(CursorStyle::Arrow, |(_, h)| h.cursor())
+                    let inside = self
+                        .editor
+                        .primary()
+                        .and_then(|id| self.canvas.window_bounds(id))
+                        .is_some_and(|b| inset_by(b, px(5.0)).contains(&p));
+                    match (self.canvas.spacing_hover, self.handle_hit(p)) {
+                        (Some(spacing), _) if inside => spacing.cursor(),
+                        (_, Some((_, h))) => h.cursor(),
+                        (Some(spacing), None) => spacing.cursor(),
+                        (None, None) => CursorStyle::Arrow,
+                    }
                 }
             }
         };
@@ -2791,6 +2891,10 @@ impl Studio {
                 }
             }))
             .on_action(cx.listener(|this, _: &PlaceImage, w, cx| this.prompt_place_image(w, cx)))
+            .on_action(cx.listener(|this, _: &ToggleRulers, _, cx| {
+                this.rulers = !this.rulers;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &StartPresenting, w, cx| this.start_present(w, cx)))
             .on_action(cx.listener(|this, _: &ExportSelection, _, cx| {
                 if let Some(id) = this.editor.primary() {
@@ -2848,6 +2952,8 @@ impl Studio {
             .children(connection_labels)
             .children(presence_tags)
             .children(annotation_tags)
+            .children(spacing_label)
+            .children(rulers)
             .children(pins)
             .when(self.editor.doc.artboards().next().is_none(), |this| {
                 this.child(
