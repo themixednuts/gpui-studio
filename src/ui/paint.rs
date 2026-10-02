@@ -285,7 +285,11 @@ impl Painter<'_> {
         c: &Computed,
         is_root: bool,
     ) -> Stateful<Div> {
-        let mut el = div().id(element_id(id));
+        // Agents find layers by name through the semantic tree.
+        let mut el = div()
+            .id(element_id(id))
+            .aria_label(self.doc.display_name(id))
+            .aria_description(format!("<{tag}> layer {id}"));
         let mut emulated_grid = false;
         // Layout model. Block flow stacks children like a column flexbox whose
         // items stretch, which matches CSS block layout for non-inline boxes.
@@ -684,6 +688,8 @@ impl Painter<'_> {
         let height = c.height.px().or_else(|| attr_px("height")).unwrap_or(width);
         let mut el = div()
             .id(element_id(id))
+            .aria_label(self.doc.display_name(id))
+            .aria_description(format!("<svg> layer {id}"))
             .relative()
             .w(self.px(width))
             .h(self.px(height))

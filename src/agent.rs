@@ -442,6 +442,62 @@ pub const COMMANDS: &[CommandSpec] = &[
         mutating: true,
     },
     CommandSpec {
+        name: "read_messages",
+        title: "Read chat messages",
+        description: "Messages the person wrote in Studio's chat (their prompts to you), oldest first, with the layers they had selected. By default returns only unread ones and marks them read. Pass your name once so the person sees who is working. To wait for the next message, call the gpui-mcp tool wait_for_element with query \"Unread chat messages for the agent\"; it matches while the person has unread messages for you.",
+        schema: || {
+            object(
+                json!({
+                    "since": { "type": "integer", "minimum": 0, "description": "Return messages after this id (including already-read ones)." },
+                    "agent": { "type": "string", "description": "Your display name, e.g. \"Claude\"." }
+                }),
+                &[],
+            )
+        },
+        mutating: false,
+    },
+    CommandSpec {
+        name: "send_message",
+        title: "Send chat message",
+        description: "Reply to the person in Studio's chat: answers, questions, or progress notes. Optionally point at layers.",
+        schema: || {
+            object(
+                json!({
+                    "text": { "type": "string" },
+                    "reply_to": { "type": "integer" },
+                    "node_ids": { "type": "array", "items": { "type": "string" } },
+                    "agent": { "type": "string" }
+                }),
+                &["text"],
+            )
+        },
+        mutating: false,
+    },
+    CommandSpec {
+        name: "set_status",
+        title: "Set agent status",
+        description: "Show the person what you are working on: a short status and the layers you are focused on (your own selection, drawn on the canvas in your color). Call with done=true when finished.",
+        schema: || {
+            object(
+                json!({
+                    "status": { "type": "string" },
+                    "node_ids": { "type": "array", "items": { "type": "string" } },
+                    "done": { "type": "boolean" },
+                    "agent": { "type": "string" }
+                }),
+                &[],
+            )
+        },
+        mutating: false,
+    },
+    CommandSpec {
+        name: "get_activity",
+        title: "Get activity",
+        description: "Recent agent edits with document revisions, plus whether the person has paused agent edits.",
+        schema: || object(json!({ "since": { "type": "integer", "minimum": 0 } }), &[]),
+        mutating: false,
+    },
+    CommandSpec {
         name: "export_image",
         title: "Export image",
         description: "Render a layer or artboard to PNG (at scale) or SVG in the project's exports/ folder, laid out exactly as on the canvas. Returns the file path; the file is written within a moment.",
@@ -805,6 +861,29 @@ struct NodesArg {
     node_ids: Vec<String>,
 }
 
+fn message_json(editor: &Editor, m: &crate::collab::Message) -> Value {
+    json!({
+        "id": m.id,
+        "from": match &m.author { crate::collab::Actor::Person => "person".to_owned(), crate::collab::Actor::Agent { name } => name.clone() },
+        "text": m.text,
+        "reply_to": m.reply_to,
+        "layers": m.nodes.iter().filter(|id| editor.doc.contains(**id)).map(|id| json!({
+            "id": id.to_string(),
+            "name": editor.doc.display_name(*id),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// The chat as JSON (for the chat resource).
+#[must_use]
+pub fn chat_json(editor: &Editor) -> Value {
+    json!({
+        "unread": editor.collab.unread_for_agent(),
+        "paused": editor.collab.paused,
+        "messages": editor.collab.messages().iter().map(|m| message_json(editor, m)).collect::<Vec<_>>(),
+    })
+}
+
 /// Every design variable with its resolved value, kind, and usage count.
 #[must_use]
 pub fn variables_json(editor: &Editor) -> Value {
@@ -838,8 +917,75 @@ fn bounds_json(editor: &Editor, id: NodeId) -> Value {
     )
 }
 
-/// Execute one command.
+/// Execute one command as the connected agent.
+///
+/// Agents are collaborators: while the person has paused them, design edits
+/// are refused; the agent's selection becomes its own presence instead of
+/// replacing the person's (unless the person follows the agent); and every
+/// edit lands in the activity feed.
 pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Value, AgentError> {
+    let mutating = COMMANDS.iter().any(|c| c.name == name && c.mutating);
+    if mutating && editor.collab.paused {
+        return Err(AgentError::Invalid(
+            "The person paused agent edits. Ask them in chat with send_message, then try again later.".into(),
+        ));
+    }
+    let person = editor.selection.clone();
+    let page = editor.page;
+    let revision = editor.revision;
+    let mentioned: Vec<NodeId> = ["node_id", "parent_id", "component_id"]
+        .iter()
+        .filter_map(|key| arguments.get(*key).and_then(Value::as_str))
+        .chain(
+            arguments
+                .get("node_ids")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str),
+        )
+        .filter_map(NodeId::parse)
+        .collect();
+    let result = execute_command(editor, name, arguments);
+    if editor.selection != person {
+        let agent = editor.collab.agent_name().to_owned();
+        let selection = editor.selection.clone();
+        editor.collab.set_presence(&agent, Some(selection), None);
+        if !editor.collab.follow {
+            editor.selection = person;
+            editor.selection.retain(|id| editor.doc.contains(*id));
+            editor.page = page.min(editor.doc.pages.len().saturating_sub(1));
+        }
+    }
+    if result.is_ok() && editor.revision != revision {
+        let nodes: Vec<NodeId> = if mentioned.is_empty() {
+            editor
+                .collab
+                .presence()
+                .get(editor.collab.agent_name())
+                .map(|p| p.nodes.clone())
+                .unwrap_or_default()
+        } else {
+            mentioned
+        };
+        let names: Vec<String> = nodes
+            .iter()
+            .filter(|id| editor.doc.contains(**id))
+            .take(3)
+            .map(|id| editor.doc.display_name(*id))
+            .collect();
+        let summary = if names.is_empty() {
+            name.replace('_', " ")
+        } else {
+            format!("{} · {}", name.replace('_', " "), names.join(", "))
+        };
+        let actor = editor.collab.agent_actor();
+        editor.collab.log(actor, summary, nodes, editor.revision);
+    }
+    result
+}
+
+fn execute_command(editor: &mut Editor, name: &str, arguments: Value) -> Result<Value, AgentError> {
     match name {
         "get_document" => Ok(document_json(editor)),
         "get_selection" => Ok(selection_json(editor)),
@@ -910,6 +1056,75 @@ pub fn execute(editor: &mut Editor, name: &str, arguments: Value) -> Result<Valu
                 editor.reset_overrides(id)?;
             }
             Ok(json!({ "id": id.to_string(), "revision": editor.revision }))
+        }
+        "read_messages" => {
+            #[derive(Deserialize)]
+            struct A {
+                since: Option<u64>,
+                agent: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            editor.collab.introduce(a.agent.as_deref());
+            let messages = editor.collab.read_for_agent(a.since);
+            Ok(json!({
+                "messages": messages.iter().map(|m| message_json(editor, m)).collect::<Vec<_>>(),
+                "paused": editor.collab.paused,
+            }))
+        }
+        "send_message" => {
+            #[derive(Deserialize)]
+            struct A {
+                text: String,
+                reply_to: Option<u64>,
+                node_ids: Option<Vec<String>>,
+                agent: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            editor.collab.introduce(a.agent.as_deref());
+            let nodes = nodes(editor, &a.node_ids.unwrap_or_default())?;
+            let actor = editor.collab.agent_actor();
+            let id = editor
+                .collab
+                .post(actor, &a.text, nodes, a.reply_to)
+                .ok_or_else(|| AgentError::Invalid("text is empty".into()))?;
+            Ok(json!({ "message_id": id }))
+        }
+        "set_status" => {
+            #[derive(Deserialize)]
+            struct A {
+                status: Option<String>,
+                node_ids: Option<Vec<String>>,
+                done: Option<bool>,
+                agent: Option<String>,
+            }
+            let a: A = args(arguments)?;
+            editor.collab.introduce(a.agent.as_deref());
+            let agent = editor.collab.agent_name().to_owned();
+            if a.done == Some(true) {
+                editor.collab.clear_presence(&agent);
+            } else {
+                let ids = a.node_ids.map(|ids| nodes(editor, &ids)).transpose()?;
+                editor.collab.set_presence(&agent, ids, a.status);
+            }
+            Ok(json!({ "agent": agent }))
+        }
+        "get_activity" => {
+            #[derive(Deserialize)]
+            struct A {
+                since: Option<u64>,
+            }
+            let a: A = args(arguments)?;
+            let since = a.since.unwrap_or(0);
+            Ok(json!({
+                "paused": editor.collab.paused,
+                "activity": editor.collab.activity().iter().filter(|e| e.id > since).map(|e| json!({
+                    "id": e.id,
+                    "actor": e.actor.name(),
+                    "summary": e.summary,
+                    "node_ids": ids_json(&e.nodes),
+                    "revision": e.revision,
+                })).collect::<Vec<_>>(),
+            }))
         }
         "export_image" => Err(AgentError::Invalid(
             "export_image needs the Studio window to lay the layer out".into(),
@@ -1476,6 +1691,11 @@ pub const RESOURCES: &[(&str, &str, &str)] = &[
         "Built-in component library.",
     ),
     (
+        "gpui-studio://chat",
+        "chat",
+        "The person's chat with you: their prompts and your replies (read_messages marks them read).",
+    ),
+    (
         "gpui-studio://variables",
         "variables",
         "Design variables (CSS custom properties) to style with var(--name).",
@@ -1492,6 +1712,7 @@ pub fn read_resource(editor: &Editor, uri: &str) -> Option<String> {
         "gpui-studio://comments/all" => comments_json(editor, true),
         "gpui-studio://components" => execute_readonly(editor, "list_components"),
         "gpui-studio://variables" => variables_json(editor),
+        "gpui-studio://chat" => chat_json(editor),
         _ => return None,
     };
     serde_json::to_string_pretty(&value).ok()
@@ -1971,5 +2192,104 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn agents_collaborate_without_taking_the_persons_selection() {
+        let mut editor = demo_editor();
+        let desktop = editor.doc.pages[0].artboards[0].root;
+        let mobile = editor.doc.pages[0].artboards[1].root;
+        editor.select([mobile]);
+        editor.collab.post(
+            crate::collab::Actor::Person,
+            "Make the desktop artboard warmer",
+            vec![desktop],
+            None,
+        );
+
+        let inbox = execute(&mut editor, "read_messages", json!({ "agent": "Claude" })).unwrap();
+        assert_eq!(
+            inbox["messages"][0]["text"],
+            "Make the desktop artboard warmer"
+        );
+        assert_eq!(inbox["messages"][0]["layers"][0]["id"], desktop.to_string());
+        execute(
+            &mut editor,
+            "set_status",
+            json!({ "status": "Warming colors", "node_ids": [desktop.to_string()] }),
+        )
+        .unwrap();
+        execute(
+            &mut editor,
+            "select_nodes",
+            json!({ "node_ids": [desktop.to_string()] }),
+        )
+        .unwrap();
+        execute(
+            &mut editor,
+            "update_styles",
+            json!({ "node_ids": [desktop.to_string()], "styles": { "background-color": "#fff4ec" } }),
+        )
+        .unwrap();
+        // The person's selection is untouched; the agent's is its presence.
+        assert_eq!(editor.selection, vec![mobile]);
+        let presence = &editor.collab.presence()["Claude"];
+        assert_eq!(presence.nodes, vec![desktop]);
+        assert_eq!(presence.status, "Warming colors");
+        let activity = execute(&mut editor, "get_activity", json!({})).unwrap();
+        assert_eq!(activity["activity"][0]["actor"], "Claude");
+        assert!(
+            activity["activity"][0]["summary"]
+                .as_str()
+                .unwrap()
+                .starts_with("update styles")
+        );
+        execute(
+            &mut editor,
+            "send_message",
+            json!({ "text": "Done — warmer background." }),
+        )
+        .unwrap();
+        assert_eq!(
+            editor.collab.messages().last().unwrap().author.name(),
+            "Claude"
+        );
+        assert!(
+            read_resource(&editor, "gpui-studio://chat")
+                .unwrap()
+                .contains("warmer background")
+        );
+
+        // Paused: edits are refused, chat still works.
+        editor.collab.paused = true;
+        assert!(
+            execute(
+                &mut editor,
+                "update_styles",
+                json!({ "node_ids": [desktop.to_string()], "styles": { "opacity": "0.5" } })
+            )
+            .is_err()
+        );
+        assert!(
+            execute(
+                &mut editor,
+                "send_message",
+                json!({ "text": "Waiting for you" })
+            )
+            .is_ok()
+        );
+        editor.collab.paused = false;
+
+        // Following: the agent's selection becomes the person's.
+        editor.collab.follow = true;
+        execute(
+            &mut editor,
+            "select_nodes",
+            json!({ "node_ids": [desktop.to_string()] }),
+        )
+        .unwrap();
+        assert_eq!(editor.selection, vec![desktop]);
+        execute(&mut editor, "set_status", json!({ "done": true })).unwrap();
+        assert!(editor.collab.presence().is_empty());
     }
 }

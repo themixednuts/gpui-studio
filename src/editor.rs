@@ -130,6 +130,8 @@ pub struct Editor {
     /// depend on rendered geometry (alignment, export, agent queries). Empty
     /// when nothing has been rendered.
     pub measured: HashMap<NodeId, Rect>,
+    /// Chat, agent presence, and activity.
+    pub collab: crate::collab::Collab,
     dirty: bool,
     last_edit: Instant,
 }
@@ -148,6 +150,7 @@ impl Editor {
             revision: 1,
             status: "Ready".to_owned(),
             measured: HashMap::new(),
+            collab: crate::collab::Collab::default(),
             dirty: false,
             last_edit: Instant::now(),
         }
@@ -161,6 +164,7 @@ impl Editor {
         }
         let comments = Comments::load(&project.studio_dir())?;
         let mut editor = Self::new(doc);
+        editor.collab = crate::collab::Collab::load(&project.studio_dir());
         editor.status = format!("Opened {}", project.root().display());
         editor.project = Some(project);
         editor.comments = Some(comments);
@@ -267,6 +271,9 @@ impl Editor {
 
     /// Save when edits have been quiet long enough. Returns whether it saved.
     pub fn autosave(&mut self) -> bool {
+        if let Err(error) = self.collab.save() {
+            self.status = format!("Saving chat failed: {error:#}");
+        }
         if self.dirty && self.last_edit.elapsed() >= AUTOSAVE_QUIET {
             if let Err(error) = self.save() {
                 self.status = format!("Save failed: {error:#}");

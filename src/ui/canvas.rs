@@ -2351,6 +2351,12 @@ impl Studio {
         }) * zoom);
         let ink: Hsla = gpui_kit::rgb(0x17181c).into();
         let guide_color: Hsla = gpui_kit::rgb(0xf24822).into();
+        let presences: Vec<Bounds<Pixels>> = self
+            .presence_overlays()
+            .into_iter()
+            .flat_map(|(_, _, bounds)| bounds)
+            .collect();
+        let presence_tags = self.render_presence_tags(self.canvas.origin());
         let prototyping = self.right_tab == RightTab::Prototype;
         let flows = if prototyping {
             self.flow_paths()
@@ -2449,6 +2455,9 @@ impl Studio {
                             }
                         }
                     }
+                }
+                for b in &presences {
+                    window.paint_quad(outline_quad(*b, 2.0, super::chat::AGENT_COLOR));
                 }
                 let flow = super::present::FLOW_COLOR;
                 for b in &flow_sources {
@@ -2818,6 +2827,7 @@ impl Studio {
             .child(overlay)
             .children(size_label)
             .children(connection_labels)
+            .children(presence_tags)
             .children(pins)
             .when(self.editor.doc.artboards().next().is_none(), |this| {
                 this.child(

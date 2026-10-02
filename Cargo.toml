@@ -17,7 +17,7 @@ directories = "6.0.0"
 ego-tree = "0.11"
 gpui-kit = "=0.7.0"
 # GPUI Kit runs on gpui-pre, so the bridge uses its gpui-pre backend.
-gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da", default-features = false, features = ["gpui-pre"] }
+gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "9dda8e5cb49990261e3fdaa26abe38112d30dafb", default-features = false, features = ["gpui-pre"] }
 imagesize = "0.15.0"
 notify = "8.2.0"
 resvg = "0.45"
@@ -30,12 +30,12 @@ thiserror = "2.0.18"
 
 [dev-dependencies]
 gpui-kit = { version = "=0.7.0", features = ["test-support"] }
-gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da", default-features = false, features = ["gpui-pre", "test-support"] }
+gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", rev = "9dda8e5cb49990261e3fdaa26abe38112d30dafb", default-features = false, features = ["gpui-pre", "test-support"] }
 
 [patch.crates-io]
 # gpui-mcp's patched gpui-pre adds the automation hooks the bridge needs
-# (see its vendor/gpui/PATCHES.md). Pinned to the same tested commit.
-gpui-pre = { git = "https://github.com/themixednuts/gpui-mcp", rev = "3629692584c83cf1076c84ebb8146ce682edb2da" }
+# (see its vendor/patches/gpui-pre/0.3.7/). Pinned to the same tested commit.
+gpui-pre = { git = "https://github.com/themixednuts/gpui-mcp", rev = "9dda8e5cb49990261e3fdaa26abe38112d30dafb" }
 
 [lints.rust]
 unsafe_code = "forbid"

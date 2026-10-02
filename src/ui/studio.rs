@@ -77,6 +77,10 @@ pub(crate) struct Studio {
     pub(crate) export_scale: f32,
     /// An image export waiting for its 1× layout.
     pub(crate) export_job: Option<super::image_export::ExportJob>,
+    /// Whether the chat panel is open.
+    pub(crate) chat_open: bool,
+    /// The chat composer.
+    pub(crate) chat_input: Entity<InputState>,
     /// A running presentation.
     pub(crate) present: Option<super::present::Present>,
     /// Pending drop target while dragging a row in the layer list.
@@ -108,8 +112,11 @@ impl Studio {
             editor.page = view.page.min(editor.doc.pages.len().saturating_sub(1));
             canvas.restore(view.zoom, point(px(view.pan_x), px(view.pan_y)));
         }
+        let (chat_input, chat_subscription) = super::chat::chat_input(window, cx);
         let studio = Self {
             editor,
+            chat_open: false,
+            chat_input,
             tool: Tool::Select,
             canvas,
             canvas_focus,
@@ -134,7 +141,7 @@ impl Studio {
             variable_edit: None,
             panel_drag: None,
             shown_status: String::new(),
-            _subscriptions: Vec::new(),
+            _subscriptions: vec![chat_subscription],
         };
         studio.start_background_loop(window, cx);
         studio
@@ -491,6 +498,7 @@ impl Render for Studio {
         let right = visible.then(|| self.render_right_panel(window, cx));
         let canvas = self.render_canvas(window, cx);
         let toolbar = self.render_toolbar(cx);
+        let chat = self.render_chat(cx);
         let view_controls = self.render_view_controls(cx);
         let left_handle = visible.then(|| self.resize_handle(PanelSide::Left, cx));
         let right_handle = visible.then(|| self.resize_handle(PanelSide::Right, cx));
@@ -542,6 +550,14 @@ impl Render for Studio {
                     .min_w_0()
                     .h_full()
                     .child(canvas)
+                    .children(chat.map(|panel| {
+                        div()
+                            .absolute()
+                            .top(px(12.0))
+                            .right(px(12.0))
+                            .bottom(px(64.0))
+                            .child(panel)
+                    }))
                     .child(
                         div()
                             .absolute()

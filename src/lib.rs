@@ -8,6 +8,7 @@
 
 pub mod agent;
 pub mod assets;
+pub mod collab;
 pub mod comments;
 pub mod editor;
 pub mod export;

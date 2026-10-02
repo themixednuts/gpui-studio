@@ -1,6 +1,7 @@
 //! The native Studio window, built on GPUI Kit.
 
 mod canvas;
+mod chat;
 mod image_export;
 mod inspector;
 mod paint;
@@ -89,7 +90,8 @@ mod actions {
             CreateComponent,
             DetachInstance,
             StartPresenting,
-            ExportSelection
+            ExportSelection,
+            ToggleChat
         ]
     );
 }
@@ -187,6 +189,7 @@ fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-tab", PreviousTab, r),
         KeyBinding::new("secondary-alt-h", ShowHome, r),
         KeyBinding::new("secondary-\\", TogglePanels, r),
+        KeyBinding::new("secondary-j", ToggleChat, r),
         KeyBinding::new("secondary-shift-t", ToggleTheme, r),
         KeyBinding::new("secondary-=", ZoomIn, r),
         KeyBinding::new("secondary--", ZoomOut, r),
@@ -944,5 +947,92 @@ mod tests {
             Some((1280.0, 820.0))
         );
         cx.update(|cx| assert!(studio.read(cx).export_job.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn chatting_with_an_agent_while_it_works_beside_you(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (handle, workspace, automation) = boot(
+            cx,
+            LaunchConfig {
+                project: Some(dir.path().join("design")),
+                example: None,
+                state_path: Some(dir.path().join("workspace.ron")),
+                mcp: false,
+            },
+        );
+        let studio = cx.update(|cx| workspace.read(cx).tabs[0].clone());
+        let (desktop, mobile) = cx.update(|cx| {
+            let doc = &studio.read(cx).editor.doc;
+            (
+                doc.pages[0].artboards[0].root,
+                doc.pages[0].artboards[1].root,
+            )
+        });
+        // The person selects the mobile artboard, opens chat, and asks.
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            studio.update(cx, |s, _| s.editor.select([mobile]));
+            window.press("secondary-j", cx);
+        })
+        .expect("open chat");
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.input("Warm up the desktop hero", cx);
+            window.press("enter", cx);
+        })
+        .expect("send");
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .expect("frame");
+        let label = |automation: &gpui_mcp::Automation, text: &str| {
+            automation.snapshot().nodes.values().any(|n| {
+                n.label.as_deref().is_some_and(|l| l.contains(text))
+                    || n.text.as_ref().is_some_and(|t| t.text.contains(text))
+            })
+        };
+        cx.update(|cx| {
+            let collab = &studio.read(cx).editor.collab;
+            assert_eq!(collab.messages().len(), 1);
+            assert_eq!(collab.messages()[0].nodes, vec![mobile]);
+            assert_eq!(collab.unread_for_agent(), 1);
+        });
+        assert!(
+            label(&automation, "Unread chat messages for the agent"),
+            "the agent can wait for this badge"
+        );
+
+        // The agent reads, focuses on the desktop artboard, edits, and replies.
+        cx.update(|cx| {
+            studio.update(cx, |s, cx| {
+                let e = &mut s.editor;
+                crate::agent::execute(e, "read_messages", serde_json::json!({ "agent": "Claude" })).expect("read");
+                crate::agent::execute(e, "set_status", serde_json::json!({ "status": "Warming", "node_ids": [desktop.to_string()] })).expect("status");
+                crate::agent::execute(e, "update_styles", serde_json::json!({ "node_ids": [desktop.to_string()], "styles": { "background-color": "#fff1e6" } })).expect("edit");
+                crate::agent::execute(e, "send_message", serde_json::json!({ "text": "Warmed it up." })).expect("reply");
+                cx.notify();
+            });
+        });
+        cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+            .expect("frame");
+        cx.update(|cx| {
+            let s = studio.read(cx);
+            assert_eq!(
+                s.editor.selection,
+                vec![mobile],
+                "the person's selection is untouched"
+            );
+            assert_eq!(s.editor.collab.unread_for_agent(), 0);
+        });
+        assert!(
+            label(&automation, "Warmed it up."),
+            "the reply shows in the chat"
+        );
+        assert!(
+            label(&automation, "Claude · Warming"),
+            "the agent's presence shows"
+        );
+        assert!(!label(&automation, "Unread chat messages for the agent"));
     }
 }

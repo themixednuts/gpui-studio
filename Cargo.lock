@@ -2608,7 +2608,7 @@ dependencies = [
 [[package]]
 name = "gpui-mcp"
 version = "0.1.0"
-source = "git+https://github.com/themixednuts/gpui-mcp?rev=3629692584c83cf1076c84ebb8146ce682edb2da#3629692584c83cf1076c84ebb8146ce682edb2da"
+source = "git+https://github.com/themixednuts/gpui-mcp?rev=9dda8e5cb49990261e3fdaa26abe38112d30dafb#9dda8e5cb49990261e3fdaa26abe38112d30dafb"
 dependencies = [
  "async-channel",
  "gpui",
@@ -2630,7 +2630,7 @@ dependencies = [
 [[package]]
 name = "gpui-mcp-protocol"
 version = "0.1.0"
-source = "git+https://github.com/themixednuts/gpui-mcp?rev=3629692584c83cf1076c84ebb8146ce682edb2da#3629692584c83cf1076c84ebb8146ce682edb2da"
+source = "git+https://github.com/themixednuts/gpui-mcp?rev=9dda8e5cb49990261e3fdaa26abe38112d30dafb#9dda8e5cb49990261e3fdaa26abe38112d30dafb"
 dependencies = [
  "directories",
  "schemars",
@@ -2642,7 +2642,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.7"
-source = "git+https://github.com/themixednuts/gpui-mcp?rev=3629692584c83cf1076c84ebb8146ce682edb2da#3629692584c83cf1076c84ebb8146ce682edb2da"
+source = "git+https://github.com/themixednuts/gpui-mcp?rev=9dda8e5cb49990261e3fdaa26abe38112d30dafb#9dda8e5cb49990261e3fdaa26abe38112d30dafb"
 dependencies = [
  "accesskit",
  "anyhow",

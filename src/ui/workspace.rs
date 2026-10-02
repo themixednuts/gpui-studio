@@ -29,8 +29,8 @@ use serde_json::{Value, json};
 use super::studio::{Studio, tab_label};
 use super::{
     CloseTab, LaunchConfig, NewProject, NextTab, OpenProject, PreviousTab, ROOT_CONTEXT, RedoEdit,
-    SaveProject, ShowHome, TogglePanels, ToggleTheme, UndoEdit, ZoomIn, ZoomOut, ZoomReset,
-    ZoomToFit, apply_brand,
+    SaveProject, ShowHome, ToggleChat, TogglePanels, ToggleTheme, UndoEdit, ZoomIn, ZoomOut,
+    ZoomReset, ZoomToFit, apply_brand,
 };
 use crate::agent;
 use crate::editor::Editor;
@@ -159,6 +159,8 @@ impl Workspace {
             .active_studio()
             .map_or(self.state.panels, |s| s.read(cx).panels);
         let studio = cx.new(|cx| Studio::new(editor, view, panels, window, cx));
+        // The title bar shows each project's agent status and unread chat.
+        cx.observe(&studio, |_, _, cx| cx.notify()).detach();
         let previous = self.state.active;
         self.state.open_tab(&root);
         self.tabs.push(studio);
@@ -666,6 +668,7 @@ impl Workspace {
                     .child(
                         h_flex()
                             .gap_1()
+                            .children(self.render_agent_pill(cx))
                             .child(
                                 div()
                                     .id("mcp-status")
@@ -700,6 +703,78 @@ impl Workspace {
                     ),
             )
             .into_any_element()
+    }
+
+    /// Title-bar summary of the active project's agent: status, waiting
+    /// messages, and the chat toggle.
+    fn render_agent_pill(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = cx.theme().clone();
+        let studio = self.active_studio()?;
+        let s = studio.read(cx);
+        let collab = &s.editor.collab;
+        let agent = collab.agent_name().to_owned();
+        let presence = collab
+            .presence()
+            .get(&agent)
+            .filter(|p| crate::collab::Collab::is_active(p))
+            .cloned();
+        let unread = collab.unread_for_agent();
+        let open = s.chat_open;
+        let label = match &presence {
+            Some(p) if !p.status.is_empty() => format!("{agent} · {}", p.status),
+            Some(_) => format!("{agent} · working"),
+            None => "Chat".to_owned(),
+        };
+        let studio = studio.clone();
+        Some(
+            h_flex()
+                .id("agent-pill")
+                // Agents can wait for this label with gpui-mcp's
+                // wait_for_element to hear about new messages.
+                .aria_label(if unread > 0 {
+                    format!("Unread chat messages for the agent: {unread}")
+                } else {
+                    "Chat with your agent".to_owned()
+                })
+                .h(px(24.0))
+                .max_w(px(280.0))
+                .px_2()
+                .gap_1p5()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_xs()
+                .when(open, |this| this.bg(theme.secondary))
+                .hover(|this| this.bg(theme.secondary))
+                .child(
+                    Icon::new(Lucide::Sparkles)
+                        .xsmall()
+                        .text_color(if presence.is_some() {
+                            super::chat::AGENT_COLOR
+                        } else {
+                            theme.muted_foreground
+                        }),
+                )
+                .child(div().truncate().child(label))
+                .when(unread > 0, |this| {
+                    this.child(
+                        div()
+                            .id("chat-unread")
+                            .px_1()
+                            .rounded(px(4.0))
+                            .bg(super::chat::AGENT_COLOR)
+                            .text_color(gpui_kit::white())
+                            .child(unread.to_string()),
+                    )
+                })
+                .tooltip(|window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new("Chat with your agent (⌘J)")
+                        .build(window, cx)
+                })
+                .on_click(move |_, window, cx| {
+                    studio.update(cx, |s, cx| s.toggle_chat(window, cx));
+                })
+                .into_any_element(),
+        )
     }
 
     fn render_home(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -924,6 +999,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| {
                 if let Some(studio) = this.active_studio() {
                     studio.update(cx, |s, cx| s.zoom_fit(cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleChat, window, cx| {
+                if let Some(studio) = this.active_studio() {
+                    studio.update(cx, |s, cx| s.toggle_chat(window, cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &TogglePanels, _, cx| {
