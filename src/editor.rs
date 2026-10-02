@@ -292,10 +292,9 @@ impl Editor {
         if self.revision != self.checkpoint_revision
             && self.last_checkpoint.elapsed() >= CHECKPOINT_EVERY
             && self.last_edit.elapsed() >= AUTOSAVE_QUIET
+            && let Err(error) = self.checkpoint("Autosave", "You", true)
         {
-            if let Err(error) = self.checkpoint("Autosave", "You", true) {
-                self.status = format!("Version checkpoint failed: {error:#}");
-            }
+            self.status = format!("Version checkpoint failed: {error:#}");
         }
         if let Err(error) = self.collab.save() {
             self.status = format!("Saving chat failed: {error:#}");
