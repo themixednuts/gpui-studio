@@ -118,8 +118,11 @@ pub(crate) struct Painter<'a> {
     pub texts: Option<&'a RefCell<HashMap<NodeId, TextCapture>>>,
     /// Shared-element offsets (screen px) to animate away, and a key that
     /// restarts the animation.
-    pub morph: Option<(&'a HashMap<NodeId, (f32, f32)>, usize)>,
+    pub morph: Option<(&'a MorphOffsets, usize)>,
 }
+
+/// Shared-element offsets by layer (screen px).
+pub(crate) type MorphOffsets = HashMap<NodeId, (f32, f32)>;
 
 /// A text layer's GPUI layout, kept for image export.
 pub(crate) struct TextCapture {
